@@ -1,0 +1,35 @@
+<Window x:Class="PlayPane.CropWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Crop Source Region"
+        Width="920"
+        Height="640"
+        MinWidth="700"
+        MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource PanelBackgroundBrush}">
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Background="#111827" BorderBrush="#D8DEE9" BorderThickness="1">
+            <Grid x:Name="PreviewHost" ClipToBounds="True" MouseLeftButtonDown="PreviewHost_MouseLeftButtonDown" MouseMove="PreviewHost_MouseMove" MouseLeftButtonUp="PreviewHost_MouseLeftButtonUp">
+                <Image x:Name="PreviewImage" Stretch="Uniform" />
+                <Canvas x:Name="CropCanvas" IsHitTestVisible="False">
+                    <Rectangle x:Name="CropRectangle" Stroke="#2B6EF3" StrokeThickness="2" Fill="#442B6EF3" />
+                </Canvas>
+            </Grid>
+        </Border>
+
+        <DockPanel Grid.Row="1" Margin="0,12,0,0">
+            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                <Button x:Name="ResetButton" Content="Reset" Click="ResetButton_Click" />
+                <Button x:Name="ConfirmButton" Content="Confirm" Click="ConfirmButton_Click" Background="#2B6EF3" Foreground="White" />
+                <Button x:Name="CancelButton" Content="Cancel" Click="CancelButton_Click" />
+            </StackPanel>
+            <TextBlock x:Name="CropInfoTextBlock" VerticalAlignment="Center" Foreground="#3D4758" />
+        </DockPanel>
+    </Grid>
+</Window>

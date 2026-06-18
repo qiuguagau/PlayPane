@@ -1,0 +1,109 @@
+<Window x:Class="PlayPane.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PlayPane"
+        Width="1040"
+        Height="720"
+        MinWidth="900"
+        MinHeight="620"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource PanelBackgroundBrush}">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" LastChildFill="True" Margin="0,0,0,12">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button x:Name="RestorePreviousButton" Content="Restore Previous Session" Click="RestorePreviousButton_Click" />
+                <Button x:Name="SettingsButton" Content="Settings" Click="SettingsButton_Click" />
+            </StackPanel>
+            <StackPanel>
+                <TextBlock Text="PlayPane" FontSize="24" FontWeight="SemiBold" />
+                <TextBlock x:Name="SubtitleTextBlock" Text="Mirror a browser window as a game-friendly overlay" Foreground="#5A6475" />
+            </StackPanel>
+        </DockPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" />
+                <ColumnDefinition Width="1.3*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="White" BorderBrush="#D8DEE9" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,10,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                        <Button x:Name="RefreshButton" DockPanel.Dock="Right" Content="Refresh" Click="RefreshButton_Click" />
+                        <CheckBox DockPanel.Dock="Right" x:Name="ShowAllWindowsCheckBox" Content="Show all windows" Checked="ShowAllWindowsCheckBox_Changed" Unchecked="ShowAllWindowsCheckBox_Changed" />
+                        <TextBox x:Name="WindowSearchTextBox" TextChanged="WindowSearchTextBox_TextChanged" ToolTip="Search source windows" />
+                    </DockPanel>
+                    <ListView Grid.Row="1" x:Name="WindowListView" SelectionChanged="WindowListView_SelectionChanged">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn x:Name="BrowserColumn" Header="Browser" Width="100" DisplayMemberBinding="{Binding BrowserType}" />
+                                <GridViewColumn x:Name="TitleColumn" Header="Title" Width="330" DisplayMemberBinding="{Binding Title}" />
+                                <GridViewColumn x:Name="ProcessColumn" Header="Process" Width="100" DisplayMemberBinding="{Binding ProcessName}" />
+                                <GridViewColumn x:Name="MonitorColumn" Header="Monitor" Width="120" DisplayMemberBinding="{Binding MonitorDeviceName}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="1" Background="White" BorderBrush="#D8DEE9" BorderThickness="1" CornerRadius="6" Padding="12">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock x:Name="SourcePreviewLabel" Text="Source Preview" FontWeight="SemiBold" Margin="0,0,0,8" />
+                        <Border Height="180" Background="#111827" BorderBrush="#2F3747" BorderThickness="1">
+                            <Image x:Name="PreviewImage" Stretch="Uniform" />
+                        </Border>
+                        <TextBlock x:Name="SelectedSourceTextBlock" Margin="0,8,0,16" Foreground="#5A6475" TextWrapping="Wrap" />
+
+                        <TextBlock x:Name="MirroringLabel" Text="Mirroring" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton x:Name="FullWindowRadioButton" Content="Full window" IsChecked="True" Margin="4" />
+                            <RadioButton x:Name="CropRadioButton" Content="Crop region" Margin="12,4,4,4" />
+                            <Button x:Name="EditCropButton" Content="Edit Crop" Click="EditCropButton_Click" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="FrameRateLabel" Text="Frame rate" Margin="4,12,4,0" />
+                        <ComboBox x:Name="FrameRateComboBox">
+                            <ComboBoxItem x:Name="FrameRateLowItem" Content="Low Resource - 15 FPS" Tag="LowResource" />
+                            <ComboBoxItem x:Name="FrameRateStandardItem" Content="Standard - 30 FPS" Tag="Standard" IsSelected="True" />
+                            <ComboBoxItem x:Name="FrameRateSmoothItem" Content="Smooth - 60 FPS" Tag="Smooth" />
+                        </ComboBox>
+
+                        <DockPanel Margin="4,12,4,0">
+                            <TextBlock x:Name="OpacityLabel" Text="Opacity" DockPanel.Dock="Left" />
+                            <TextBlock x:Name="OpacityValueTextBlock" Text="80%" DockPanel.Dock="Right" />
+                        </DockPanel>
+                        <Slider x:Name="OpacitySlider" Minimum="10" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" Value="80" ValueChanged="OpacitySlider_ValueChanged" />
+                        <CheckBox x:Name="AspectRatioCheckBox" Content="Lock aspect ratio" IsChecked="True" />
+
+                        <TextBlock x:Name="SourcePlacementLabel" Text="Source window placement" Margin="4,12,4,0" />
+                        <ComboBox x:Name="PlacementComboBox">
+                            <ComboBoxItem x:Name="KeepOriginalPositionItem" Content="Keep original position" Tag="KeepOriginalPosition" IsSelected="True" />
+                            <ComboBoxItem x:Name="MoveRightEdgeItem" Content="Move to right edge" Tag="MoveRightEdge" />
+                            <ComboBoxItem x:Name="MoveMostlyOffScreenItem" Content="Move mostly off-screen" Tag="MoveMostlyOffScreen" />
+                        </ComboBox>
+
+                        <Separator Margin="0,16,0,12" />
+                        <Button x:Name="StartOverlayButton" Content="Start Overlay" Click="StartOverlayButton_Click" Background="#2B6EF3" Foreground="White" />
+                        <Button x:Name="StopMirroringButton" Content="Stop Mirroring" Click="StopMirroringButton_Click" />
+                        <Button x:Name="RestoreSourceButton" Content="Restore Source Window" Click="RestoreSourceButton_Click" />
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" Background="#EEF2F8" BorderBrush="#D8DEE9" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,12,0,0">
+            <TextBlock x:Name="StatusTextBlock" Text="Ready" />
+        </Border>
+    </Grid>
+</Window>

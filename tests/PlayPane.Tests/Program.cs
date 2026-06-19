@@ -24,6 +24,7 @@ namespace PlayPane.Tests
                 SettingsServiceTests.DefaultsToBrowserExtensionCapture,
                 OverlayModePolicyTests.EditModeDoesNotEnableOverlayBehavior,
                 OverlayModePolicyTests.GameModeEnablesOverlayBehavior,
+                OverlayWindowLayoutTests.ToolbarUsesWrappingLayout,
                 CaptureSessionTests.BrowserExtensionSessionDoesNotRequireSourceWindow,
                 ExtensionSignalingServerTests.RoutesOfferFromSourceToViewer,
                 ExtensionSignalingServerTests.QueuesOfferUntilViewerConnects,

@@ -10,6 +10,7 @@ using Forms = System.Windows.Forms;
 using PlayPane.Core.Capture;
 using PlayPane.Core.Input;
 using PlayPane.Core.Models;
+using PlayPane.Core.Native;
 using PlayPane.Core.Services;
 
 namespace PlayPane
@@ -24,8 +25,12 @@ namespace PlayPane
         private OverlayWindow _overlayWindow;
         private Forms.NotifyIcon _trayIcon;
         private Forms.ContextMenuStrip _trayMenu;
+        private Forms.ToolStripMenuItem _showOverlayMenuItem;
+        private Forms.ToolStripMenuItem _hideOverlayMenuItem;
         private LocalizationService _localizer;
         private bool _explicitExit;
+        private bool _exitShutdownComplete;
+        private bool _exitShutdownInProgress;
         private bool _isStoppingMirroring;
         private bool _isPreviewViewerActive;
         private Task _pendingStopTask = Task.CompletedTask;
@@ -83,6 +88,13 @@ namespace PlayPane
                 return;
             }
 
+            if (!_exitShutdownComplete)
+            {
+                e.Cancel = true;
+                BeginExitShutdown();
+                return;
+            }
+
             SaveSettingsFromUi();
             StopMirroring(false);
         }
@@ -90,8 +102,11 @@ namespace PlayPane
         private void MainWindow_Closed(object sender, EventArgs e)
         {
             _hotkeyService.Dispose();
-            _ = StopPreviewViewerAsync();
-            StopExtensionServer();
+            if (!_exitShutdownComplete)
+            {
+                _ = StopPreviewViewerAsync();
+                _ = StopExtensionServerAsync();
+            }
             DisposeTrayIcon();
         }
 
@@ -224,6 +239,7 @@ namespace PlayPane
             Hide();
             UpdateExtensionStatus();
             UpdateStatus(L("Status.OverlayStarted"));
+            UpdateTrayOverlayMenuState();
         }
 
         private void StopMirroring(bool restartPreview)
@@ -249,6 +265,7 @@ namespace PlayPane
                 SaveSettingsFromUi();
                 UpdateExtensionStatus();
                 UpdateStatus(L("Status.MirroringStopped"));
+                UpdateTrayOverlayMenuState();
             }
             finally
             {
@@ -279,14 +296,15 @@ namespace PlayPane
             }
         }
 
-        private void StopExtensionServer()
+        private async Task StopExtensionServerAsync()
         {
+            await _pendingStopTask.ConfigureAwait(true);
             if (!_extensionSignalingServer.IsRunning)
             {
                 return;
             }
 
-            _pendingStopTask = Task.Run(async () =>
+            _pendingStopTask = Task.Run(async delegate
             {
                 try
                 {
@@ -297,6 +315,35 @@ namespace PlayPane
                     // Shutdown is best effort while the WPF dispatcher is closing.
                 }
             });
+            await _pendingStopTask.ConfigureAwait(true);
+        }
+
+        private void BeginExitShutdown()
+        {
+            if (_exitShutdownInProgress)
+            {
+                return;
+            }
+
+            _exitShutdownInProgress = true;
+            _ = CompleteExitShutdownAsync();
+        }
+
+        private async Task CompleteExitShutdownAsync()
+        {
+            try
+            {
+                SaveSettingsFromUi();
+                StopMirroring(false);
+                await StopPreviewViewerAsync().ConfigureAwait(true);
+                await _extensionSignalingServer.RequestSourceCaptureStopAsync().ConfigureAwait(true);
+                await StopExtensionServerAsync().ConfigureAwait(true);
+            }
+            finally
+            {
+                _exitShutdownComplete = true;
+                Close();
+            }
         }
 
         private async Task StartPreviewViewerAsync()
@@ -478,20 +525,13 @@ namespace PlayPane
 
         private void ToggleOverlayVisibility()
         {
-            if (_overlayWindow == null)
+            if (_overlayWindow == null || !_overlayWindow.IsVisible)
             {
-                StartOverlay();
+                ShowOverlayFromTray();
                 return;
             }
 
-            if (_overlayWindow.IsVisible)
-            {
-                _overlayWindow.Hide();
-            }
-            else
-            {
-                _overlayWindow.Show();
-            }
+            HideOverlayFromTray();
         }
 
         private void ToggleOverlayMode()
@@ -535,27 +575,21 @@ namespace PlayPane
             _trayIcon.Icon = Drawing.SystemIcons.Application;
             _trayIcon.Visible = true;
             _trayIcon.DoubleClick += delegate { QueueUiAction(ShowControlPanel); };
-            _trayIcon.MouseUp += TrayIcon_MouseUp;
 
             _trayMenu = new Forms.ContextMenuStrip();
+            _trayMenu.Opening += TrayMenu_Opening;
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.ShowControlPanel"), ShowControlPanel));
-            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.ShowOverlay"), delegate
-            {
-                if (_overlayWindow == null)
-                {
-                    StartOverlay();
-                }
-                else
-                {
-                    _overlayWindow.Show();
-                }
-            }));
-            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.HideOverlay"), delegate { if (_overlayWindow != null) _overlayWindow.Hide(); }));
-            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.EnterEditMode"), delegate { if (_overlayWindow != null) _overlayWindow.EnterEditMode(); }));
-            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.EnterGameMode"), delegate { if (_overlayWindow != null) _overlayWindow.EnterGameMode(); }));
+            _showOverlayMenuItem = CreateTrayMenuItem(L("Tray.ShowOverlay"), ShowOverlayFromTray);
+            _hideOverlayMenuItem = CreateTrayMenuItem(L("Tray.HideOverlay"), HideOverlayFromTray);
+            _trayMenu.Items.Add(_showOverlayMenuItem);
+            _trayMenu.Items.Add(_hideOverlayMenuItem);
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.EnterEditMode"), EnterEditModeFromTray));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.EnterGameMode"), EnterGameModeFromTray));
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.StopMirroring"), delegate { StopMirroring(true); }));
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.Settings"), OpenSettings));
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.Exit"), ExitApplication));
+            UpdateTrayOverlayMenuState();
+            _trayIcon.ContextMenuStrip = _trayMenu;
         }
 
         private Forms.ToolStripMenuItem CreateTrayMenuItem(string text, Action action)
@@ -565,11 +599,135 @@ namespace PlayPane
             return item;
         }
 
-        private void TrayIcon_MouseUp(object sender, Forms.MouseEventArgs e)
+        private void TrayMenu_Opening(object sender, CancelEventArgs e)
         {
-            if (e.Button == Forms.MouseButtons.Right && _trayMenu != null)
+            UpdateTrayOverlayMenuState();
+        }
+
+        private void ShowOverlayFromTray()
+        {
+            if (_overlayWindow == null)
             {
-                _trayMenu.Show(Forms.Control.MousePosition);
+                StartOverlay();
+                return;
+            }
+
+            ShowExistingOverlayFromTray();
+            UpdateTrayOverlayMenuState();
+        }
+
+        private void ShowExistingOverlayFromTray()
+        {
+            _overlayWindow.Show();
+            if (_overlayWindow.WindowState == WindowState.Minimized)
+            {
+                _overlayWindow.WindowState = WindowState.Normal;
+            }
+
+            if (_overlayWindow.IsGameMode)
+            {
+                _overlayWindow.EnterGameMode();
+                return;
+            }
+
+            _overlayWindow.Topmost = true;
+            _overlayWindow.Activate();
+            _overlayWindow.Topmost = false;
+        }
+
+        private void HideOverlayFromTray()
+        {
+            if (_overlayWindow == null)
+            {
+                UpdateTrayOverlayMenuState();
+                return;
+            }
+
+            _overlayWindow.Hide();
+            UpdateStatus(L("Status.OverlayHidden"));
+            UpdateTrayOverlayMenuState();
+        }
+
+        private void EnterEditModeFromTray()
+        {
+            if (_overlayWindow == null)
+            {
+                return;
+            }
+
+            _overlayWindow.Show();
+            if (_overlayWindow.WindowState == WindowState.Minimized)
+            {
+                _overlayWindow.WindowState = WindowState.Normal;
+            }
+
+            _overlayWindow.EnterEditMode();
+            BringOverlayToForegroundForEditing(_overlayWindow);
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                if (_overlayWindow != null && _overlayWindow.IsVisible && !_overlayWindow.IsGameMode)
+                {
+                    BringOverlayToForegroundForEditing(_overlayWindow);
+                }
+            }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            UpdateTrayOverlayMenuState();
+        }
+
+        private void BringOverlayToForegroundForEditing(OverlayWindow overlay)
+        {
+            if (overlay == null)
+            {
+                return;
+            }
+
+            IntPtr handle = new WindowInteropHelper(overlay).Handle;
+            uint flags = Win32Api.SWP_NOMOVE | Win32Api.SWP_NOSIZE | Win32Api.SWP_SHOWWINDOW;
+            if (handle != IntPtr.Zero)
+            {
+                Win32Api.SetWindowPos(handle, Win32Api.HWND_TOPMOST, 0, 0, 0, 0, flags);
+                Win32Api.SetForegroundWindow(handle);
+            }
+
+            overlay.Activate();
+
+            if (handle != IntPtr.Zero)
+            {
+                Win32Api.SetWindowPos(handle, Win32Api.HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+            }
+
+            overlay.Topmost = false;
+        }
+
+        private void EnterGameModeFromTray()
+        {
+            if (_overlayWindow == null)
+            {
+                return;
+            }
+
+            _overlayWindow.Show();
+            if (_overlayWindow.WindowState == WindowState.Minimized)
+            {
+                _overlayWindow.WindowState = WindowState.Normal;
+            }
+
+            _overlayWindow.EnterGameMode();
+            UpdateTrayOverlayMenuState();
+        }
+
+        private void UpdateTrayOverlayMenuState()
+        {
+            bool canUseOverlayCommands = !_exitShutdownInProgress;
+            bool overlayVisible = _overlayWindow != null && _overlayWindow.IsVisible;
+
+            if (_showOverlayMenuItem != null)
+            {
+                _showOverlayMenuItem.Enabled = canUseOverlayCommands;
+            }
+
+            if (_hideOverlayMenuItem != null)
+            {
+                _hideOverlayMenuItem.Enabled = canUseOverlayCommands && overlayVisible;
             }
         }
 
@@ -609,15 +767,18 @@ namespace PlayPane
             if (_trayIcon != null)
             {
                 _trayIcon.Visible = false;
-                _trayIcon.MouseUp -= TrayIcon_MouseUp;
+                _trayIcon.ContextMenuStrip = null;
                 _trayIcon.Dispose();
                 _trayIcon = null;
             }
 
             if (_trayMenu != null)
             {
+                _trayMenu.Opening -= TrayMenu_Opening;
                 _trayMenu.Dispose();
                 _trayMenu = null;
+                _showOverlayMenuItem = null;
+                _hideOverlayMenuItem = null;
             }
         }
 
@@ -643,6 +804,7 @@ namespace PlayPane
         private void OverlayWindow_HiddenRequested(object sender, EventArgs e)
         {
             UpdateStatus(L("Status.OverlayHidden"));
+            UpdateTrayOverlayMenuState();
         }
 
         private void OverlayWindow_Closed(object sender, EventArgs e)
@@ -658,6 +820,8 @@ namespace PlayPane
             {
                 _overlayWindow = null;
             }
+
+            UpdateTrayOverlayMenuState();
 
             if (!_isStoppingMirroring && !_explicitExit)
             {

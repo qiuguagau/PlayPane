@@ -28,6 +28,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === "desktop-exiting") {
+    stopCapture();
+    reportStatus("idle", "");
+    sendResponse({ ok: true });
+    return false;
+  }
+
   return false;
 });
 
@@ -245,6 +252,12 @@ async function handleSignal(rawMessage) {
 
   if (message.type === "viewer-stopped") {
     stopPeerConnection();
+    return;
+  }
+
+  if (message.type === "desktop-exiting") {
+    stopCapture();
+    reportStatus("idle", "");
     return;
   }
 

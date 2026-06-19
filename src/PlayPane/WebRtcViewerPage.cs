@@ -25,7 +25,7 @@ namespace PlayPane
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #020617;
+      background: transparent;
     }
     :root {
       --playpane-opacity: " + initialOpacity + @";
@@ -35,7 +35,7 @@ namespace PlayPane
       height: 100vh;
       object-fit: " + objectFit + @";
       opacity: var(--playpane-opacity);
-      background: #020617;
+      background: transparent;
       display: block;
     }
     #status {
@@ -207,7 +207,7 @@ namespace PlayPane
 
         public static string Blank
         {
-            get { return "<!doctype html><html><body style=\"margin:0;background:#020617\"></body></html>"; }
+            get { return "<!doctype html><html><body style=\"margin:0;background:transparent\"></body></html>"; }
         }
     }
 }

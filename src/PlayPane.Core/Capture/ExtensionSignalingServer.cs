@@ -20,6 +20,7 @@ namespace PlayPane.Core.Capture
 
         private const string SourceRole = "source";
         private const string ViewerRole = "viewer";
+        private const string DesktopExitingSignal = "{\"role\":\"viewer\",\"type\":\"desktop-exiting\"}";
         private const int MaxPendingSignalsPerRole = 64;
 
         private readonly object _syncRoot = new object();
@@ -100,6 +101,35 @@ namespace PlayPane.Core.Capture
                 await app.DisposeAsync().ConfigureAwait(false);
                 _stopTokenSource.Dispose();
                 _stopTokenSource = null;
+            }
+        }
+
+        public async Task RequestSourceCaptureStopAsync()
+        {
+            WebSocket sourceSocket;
+            lock (_syncRoot)
+            {
+                sourceSocket = _sourceSocket;
+                if (sourceSocket == null || sourceSocket.State != WebSocketState.Open)
+                {
+                    EnqueuePendingSignal(SourceRole, DesktopExitingSignal);
+                    return;
+                }
+            }
+
+            try
+            {
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1)))
+                {
+                    await SendTextAsync(sourceSocket, DesktopExitingSignal, timeout.Token).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                lock (_syncRoot)
+                {
+                    EnqueuePendingSignal(SourceRole, DesktopExitingSignal);
+                }
             }
         }
 

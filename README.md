@@ -1,25 +1,22 @@
 # PlayPane
 
-PlayPane is a Windows desktop utility for mirroring an existing browser window into an always-on-top overlay for windowed or borderless fullscreen games.
+PlayPane is a Windows desktop utility for mirroring a Chrome or Microsoft Edge tab into an always-on-top overlay for windowed or borderless fullscreen games.
 
 ## Current MVP
 
-- Lists capturable Chrome, Firefox, Edge, and optionally all top-level windows.
-- Starts a movable, resizable, always-on-top overlay.
-- Captures the selected window with a Win32 `PrintWindow` backend and a screen-copy fallback.
-- Supports full-window mirroring and rectangular crop selection.
+- Captures a Chrome or Microsoft Edge tab through the unpacked extension in `extensions/chromium-playpane`.
+- Starts the local WebRTC signaling server when the app opens and shows the extension stream in the main preview panel when available.
+- Starts a movable, resizable, always-on-top overlay backed by an embedded WebView2 WebRTC viewer.
 - Supports opacity control, 15/30/60 FPS modes, Edit Mode, Game Mode, and mouse click-through.
 - Registers default global shortcuts:
   - `Ctrl + Alt + O`: show/hide overlay
   - `Ctrl + Alt + E`: toggle Edit/Game Mode
   - `Ctrl + Alt + Up`: increase opacity
   - `Ctrl + Alt + Down`: decrease opacity
-  - `Ctrl + Alt + R`: edit crop
   - `Ctrl + Alt + Q`: stop mirroring
 - Saves local settings under the current user's application data folder.
 - Supports English and Simplified Chinese UI language selection from Settings.
-- Supports Chrome/Edge extension capture through the unpacked extension in `extensions/chromium-playpane`.
-- Saves a temporary recovery file before moving the source window and offers recovery on next launch.
+- Uses WebRTC for video mirroring while the local WebSocket is used only for signaling.
 - Provides a system tray menu for common actions.
 
 ## Build
@@ -35,17 +32,13 @@ dotnet run --project src\PlayPane\PlayPane.csproj
 
 ## Chrome/Edge Extension Capture
 
-Use this mode when the browser window may be minimized or otherwise unavailable to normal window capture.
-
 1. Build and start PlayPane.
-2. In PlayPane, set Capture source to Chrome/Edge Extension Capture.
-3. Click Start Overlay. PlayPane starts a local WebSocket server at `ws://127.0.0.1:17632/playpane`.
-4. In Chrome or Edge, open `chrome://extensions` or `edge://extensions`.
-5. Enable Developer mode and load the unpacked extension folder `extensions/chromium-playpane`.
-6. Open the target tab, click the PlayPane Capture extension icon, then click Start current tab.
+2. PlayPane starts a local WebRTC signaling server at `ws://127.0.0.1:17632/playpane` and waits in the main preview panel.
+3. In Chrome or Edge, open `chrome://extensions` or `edge://extensions`.
+4. Enable Developer mode and load the unpacked extension folder `extensions/chromium-playpane`.
+5. Open the target tab, click the PlayPane Capture extension icon, then click Start current tab.
+6. After the preview appears in PlayPane, click Start Overlay.
 
-The extension captures the current tab with Chrome's `tabCapture` API and streams JPEG frames to the desktop app.
+The extension captures the current tab with Chrome's `tabCapture` API and sends the video stream over WebRTC to the overlay's embedded WebView2 viewer. The local WebSocket only exchanges control and signaling messages such as `viewer-ready`, `viewer-stopped`, `offer`, `answer`, and ICE candidates.
 
-## Notes
-
-The product spec recommends Windows Graphics Capture for the final capture backend. This MVP keeps the capture backend isolated behind `IWindowCaptureService`; the current implementation uses Win32 `PrintWindow` plus fallback screen copy so the rest of the app is usable while the lower-level capture backend can be upgraded later.
+After the tab is selected once, stopping and starting the PlayPane overlay reconnects to the same extension source automatically. Use Stop in the extension popup only when you want to release the selected browser tab.

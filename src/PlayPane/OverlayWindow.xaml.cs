@@ -1,12 +1,10 @@
 using System;
-using System.Drawing;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Threading;
-using PlayPane.Core.Capture;
 using PlayPane.Core.Input;
 using PlayPane.Core.Models;
 using PlayPane.Core.Native;
@@ -16,54 +14,45 @@ namespace PlayPane
 {
     public partial class OverlayWindow : Window
     {
-        private readonly IWindowCaptureService _captureService;
-        private readonly FrameRateController _frameRateController;
         private readonly SettingsService _settingsService;
+        private readonly FrameRateController _frameRateController = new FrameRateController();
         private readonly ClickThroughService _clickThroughService = new ClickThroughService();
-        private readonly DispatcherTimer _timer = new DispatcherTimer();
-        private CaptureSession _session;
         private AppSettings _settings;
-        private DateTime _lastValidFrameUtc;
         private LocalizationService _localizer = new LocalizationService(AppLanguage.English);
+        private Uri _webRtcSignalingUri;
+        private bool _isRestartingViewer;
 
-        public OverlayWindow(IWindowCaptureService captureService, FrameRateController frameRateController, SettingsService settingsService)
+        public OverlayWindow(SettingsService settingsService)
         {
             InitializeComponent();
-            _captureService = captureService;
-            _frameRateController = frameRateController;
             _settingsService = settingsService;
-            _timer.Tick += Timer_Tick;
             Activated += OverlayWindow_Activated;
             Closing += OverlayWindow_Closing;
         }
 
         public event EventHandler StopRequested;
 
-        public event EventHandler CropRequested;
-
         public event EventHandler HiddenRequested;
 
         public bool IsGameMode { get; private set; }
 
-        public void Configure(CaptureSession session, AppSettings settings)
+        public void Configure(CaptureSession session, AppSettings settings, Uri webRtcSignalingUri)
         {
-            _session = session;
             _settings = settings;
+            _webRtcSignalingUri = webRtcSignalingUri;
             SetLanguage(settings.Language);
             Left = settings.OverlayBounds.X;
             Top = settings.OverlayBounds.Y;
             Width = settings.OverlayBounds.Width;
             Height = settings.OverlayBounds.Height;
             SetOpacityPercent(settings.OpacityPercent);
-            MirrorImage.Stretch = settings.AspectRatioLocked ? Stretch.Uniform : Stretch.Fill;
             SelectFrameRate(settings.FrameRateMode);
-            UpdateTimerInterval();
-            _timer.Start();
+            InitializeWebRtcViewer();
         }
 
         public void StopCapture()
         {
-            _timer.Stop();
+            _ = StopWebRtcViewerAsync();
         }
 
         public void SetLanguage(AppLanguage language)
@@ -72,7 +61,6 @@ namespace PlayPane
             Title = _localizer.Get("Overlay.Title");
             ToolbarTitle.Text = _localizer.Get("Overlay.Title");
             OpacityLabel.Text = _localizer.Get("Overlay.Opacity");
-            CropButton.Content = _localizer.Get("Overlay.Crop");
             LockButton.Content = _localizer.Get("Overlay.Lock");
             HideButton.Content = _localizer.Get("Overlay.Hide");
             StopButton.Content = _localizer.Get("Overlay.Stop");
@@ -104,57 +92,12 @@ namespace PlayPane
         public void SetOpacityPercent(int opacityPercent)
         {
             int value = Math.Max(10, Math.Min(100, opacityPercent));
-            MirrorImage.Opacity = value / 100.0;
+            ApplyWebRtcOpacity(value);
             OpacitySlider.Value = value;
             if (_settings != null)
             {
                 _settings.OpacityPercent = value;
                 _settingsService.Save(_settings);
-            }
-        }
-
-        public void UpdateCrop(CropRegion cropRegion, PlayPane.Core.Models.CaptureMode mode)
-        {
-            if (_settings != null)
-            {
-                _settings.CropRegion = cropRegion;
-                _settings.CaptureMode = mode;
-                _settingsService.Save(_settings);
-            }
-        }
-
-        private void Timer_Tick(object sender, EventArgs e)
-        {
-            if (_session == null || _settings == null || !IsVisible)
-            {
-                return;
-            }
-
-            try
-            {
-                if (_session.Source != null && Win32Api.IsIconic(_session.Source.Handle))
-                {
-                    ShowWarning(_localizer.Get("Overlay.SourceMinimized"));
-                }
-
-                using (Bitmap bitmap = _captureService.Capture(_session.Source, _settings.CaptureMode, _settings.CropRegion))
-                {
-                    MirrorImage.Source = ImageConversion.ToBitmapSource(bitmap);
-                    _lastValidFrameUtc = DateTime.UtcNow;
-                    if (_session.Source == null || !Win32Api.IsIconic(_session.Source.Handle))
-                    {
-                        WarningBorder.Visibility = Visibility.Collapsed;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                ShowWarning(ex.Message);
-            }
-
-            if (_lastValidFrameUtc != DateTime.MinValue && DateTime.UtcNow - _lastValidFrameUtc > TimeSpan.FromSeconds(5))
-            {
-                ShowWarning(_localizer.Get("Overlay.FramePaused"));
             }
         }
 
@@ -177,6 +120,11 @@ namespace PlayPane
 
         private void Toolbar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
+            if (IsInteractiveToolbarElement(e.OriginalSource as DependencyObject))
+            {
+                return;
+            }
+
             if (e.ClickCount == 2)
             {
                 EnterGameMode();
@@ -184,6 +132,48 @@ namespace PlayPane
             }
 
             DragMove();
+        }
+
+        private bool IsInteractiveToolbarElement(DependencyObject source)
+        {
+            while (source != null && source != Toolbar)
+            {
+                if (source is ButtonBase ||
+                    source is Slider ||
+                    source is ComboBox ||
+                    source is Thumb)
+                {
+                    return true;
+                }
+
+                source = GetElementParent(source);
+            }
+
+            return false;
+        }
+
+        private static DependencyObject GetElementParent(DependencyObject source)
+        {
+            FrameworkElement element = source as FrameworkElement;
+            if (element != null && element.Parent != null)
+            {
+                return element.Parent;
+            }
+
+            FrameworkContentElement contentElement = source as FrameworkContentElement;
+            if (contentElement != null)
+            {
+                return contentElement.Parent;
+            }
+
+            try
+            {
+                return VisualTreeHelper.GetParent(source);
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
         }
 
         private void OpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -205,16 +195,7 @@ namespace PlayPane
 
             _settings.FrameRateMode = ReadFrameRateMode();
             _settingsService.Save(_settings);
-            UpdateTimerInterval();
-        }
-
-        private void CropButton_Click(object sender, RoutedEventArgs e)
-        {
-            EventHandler handler = CropRequested;
-            if (handler != null)
-            {
-                handler(this, EventArgs.Empty);
-            }
+            RestartWebRtcViewer();
         }
 
         private void LockButton_Click(object sender, RoutedEventArgs e)
@@ -271,10 +252,83 @@ namespace PlayPane
             return FrameRateMode.Standard;
         }
 
-        private void UpdateTimerInterval()
+        private async void InitializeWebRtcViewer()
         {
-            FrameRateMode mode = _settings == null ? FrameRateMode.Standard : _settings.FrameRateMode;
-            _timer.Interval = _frameRateController.GetInterval(mode);
+            if (_webRtcSignalingUri == null)
+            {
+                ShowWarning(_localizer.Get("Overlay.WebRtcMissingSignaling"));
+                return;
+            }
+
+            try
+            {
+                await WebRtcView.EnsureCoreWebView2Async().ConfigureAwait(true);
+                WebRtcView.DefaultBackgroundColor = System.Drawing.Color.FromArgb(2, 6, 23);
+                WebRtcView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+                WebRtcView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                WebRtcView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+                WebRtcView.CoreWebView2.NavigateToString(WebRtcViewerPage.Build(
+                    _webRtcSignalingUri,
+                    _localizer.Get("Overlay.WebRtcWaiting"),
+                    _settings == null || _settings.AspectRatioLocked,
+                    _settings == null ? 100 : _settings.OpacityPercent,
+                    _frameRateController.GetFramesPerSecond(_settings == null ? FrameRateMode.Standard : _settings.FrameRateMode)));
+                ApplyWebRtcOpacity(_settings == null ? 100 : _settings.OpacityPercent);
+            }
+            catch (Exception ex)
+            {
+                ShowWarning(ex.Message);
+            }
+        }
+
+        private async void RestartWebRtcViewer()
+        {
+            if (_isRestartingViewer)
+            {
+                return;
+            }
+
+            _isRestartingViewer = true;
+            try
+            {
+                await StopWebRtcViewerAsync().ConfigureAwait(true);
+                InitializeWebRtcViewer();
+            }
+            finally
+            {
+                _isRestartingViewer = false;
+            }
+        }
+
+        private async System.Threading.Tasks.Task StopWebRtcViewerAsync()
+        {
+            try
+            {
+                if (WebRtcView.CoreWebView2 != null)
+                {
+                    await WebRtcView.CoreWebView2.ExecuteScriptAsync("window.playPaneStopViewer && window.playPaneStopViewer();").ConfigureAwait(true);
+                    await System.Threading.Tasks.Task.Delay(80).ConfigureAwait(true);
+                    WebRtcView.CoreWebView2.NavigateToString(WebRtcViewerPage.Blank);
+                }
+            }
+            catch
+            {
+                // The WebView may already be tearing down with the overlay.
+            }
+        }
+
+        private void ApplyWebRtcOpacity(int opacityPercent)
+        {
+            if (WebRtcView.CoreWebView2 == null)
+            {
+                return;
+            }
+
+            double opacity = Math.Max(10, Math.Min(100, opacityPercent)) / 100.0;
+            string script = "document.documentElement.style.setProperty('--playpane-opacity', '" +
+                opacity.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                "');";
+            WebRtcView.CoreWebView2.ExecuteScriptAsync(script);
         }
 
         private void ShowWarning(string message)

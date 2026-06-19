@@ -14,14 +14,13 @@ namespace PlayPane
             InitializeComponent();
             _localizer = localizer;
             ApplyLocalization();
-            AutoRestoreCheckBox.IsChecked = settings.AutoRestorePreviousSessionOnStartup;
             StartWithWindowsCheckBox.IsChecked = settings.StartWithWindows;
             SelectLanguage(settings.Language);
         }
 
         public bool AutoRestorePreviousSessionOnStartup
         {
-            get { return AutoRestoreCheckBox.IsChecked == true; }
+            get { return false; }
         }
 
         public bool StartWithWindows
@@ -51,13 +50,11 @@ namespace PlayPane
             LanguageLabel.Text = _localizer.Get("Settings.Language");
             EnglishItem.Content = _localizer.Get("Language.English");
             SimplifiedChineseItem.Content = _localizer.Get("Language.SimplifiedChinese");
-            AutoRestoreCheckBox.Content = _localizer.Get("Settings.AutoRestore");
             StartWithWindowsCheckBox.Content = _localizer.Get("Settings.StartWithWindows");
             GlobalShortcutsLabel.Text = _localizer.Get("Settings.GlobalShortcuts");
             ShortcutToggleOverlayText.Text = _localizer.Get("Settings.ShortcutToggleOverlay");
             ShortcutToggleModeText.Text = _localizer.Get("Settings.ShortcutToggleMode");
             ShortcutOpacityText.Text = _localizer.Get("Settings.ShortcutOpacity");
-            ShortcutCropText.Text = _localizer.Get("Settings.ShortcutCrop");
             ShortcutStopText.Text = _localizer.Get("Settings.ShortcutStop");
             SaveButton.Content = _localizer.Get("Settings.Save");
             CancelButton.Content = _localizer.Get("Common.Cancel");

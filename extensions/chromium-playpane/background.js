@@ -64,8 +64,7 @@ async function startCapture(options) {
     type: "start-capture",
     streamId: options.streamId,
     serverUrl: PLAYPANE_SOCKET_URL,
-    frameRate: 30,
-    quality: 0.74
+    frameRate: 60
   });
 
   captureState = {
@@ -93,6 +92,6 @@ async function ensureOffscreenDocument() {
   await chrome.offscreen.createDocument({
     url: OFFSCREEN_DOCUMENT_PATH,
     reasons: ["USER_MEDIA"],
-    justification: "Capture the user-selected browser tab and stream frames to the PlayPane desktop app."
+    justification: "Capture the user-selected browser tab and stream it to the PlayPane desktop app."
   });
 }

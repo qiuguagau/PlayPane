@@ -1,59 +1,40 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Drawing;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
-using System.Windows.Threading;
+using Drawing = System.Drawing;
 using Forms = System.Windows.Forms;
-using PlayPane.Core.Application;
 using PlayPane.Core.Capture;
 using PlayPane.Core.Input;
 using PlayPane.Core.Models;
 using PlayPane.Core.Services;
-using PlayPane.Core.Windowing;
 
 namespace PlayPane
 {
     public partial class MainWindow : Window
     {
-        private readonly WindowEnumerator _windowEnumerator = new WindowEnumerator();
         private readonly SettingsService _settingsService = new SettingsService();
-        private readonly RecoveryService _recoveryService = new RecoveryService();
-        private readonly StateManager _stateManager = new StateManager();
-        private readonly SourceWindowManager _sourceWindowManager = new SourceWindowManager();
-        private readonly WindowCaptureService _captureService = new WindowCaptureService();
-        private readonly ExtensionFrameStore _extensionFrameStore = new ExtensionFrameStore();
+        private readonly ExtensionSignalingServer _extensionSignalingServer = new ExtensionSignalingServer();
         private readonly GlobalHotkeyService _hotkeyService = new GlobalHotkeyService();
-        private readonly DispatcherTimer _previewTimer = new DispatcherTimer();
-        private readonly List<SourceWindowInfo> _allWindows = new List<SourceWindowInfo>();
-        private readonly ExtensionCaptureService _extensionCaptureService;
-        private readonly ExtensionFrameServer _extensionFrameServer;
-        private SessionManager _sessionManager;
+        private readonly FrameRateController _frameRateController = new FrameRateController();
         private AppSettings _settings;
         private OverlayWindow _overlayWindow;
         private Forms.NotifyIcon _trayIcon;
         private Forms.ContextMenuStrip _trayMenu;
-        private bool _explicitExit;
         private LocalizationService _localizer;
-        private DateTime _lastExtensionStatusUtc = DateTime.MinValue;
+        private bool _explicitExit;
         private bool _isStoppingMirroring;
+        private bool _isPreviewViewerActive;
         private Task _pendingStopTask = Task.CompletedTask;
 
         public MainWindow()
         {
             InitializeComponent();
-            _extensionCaptureService = new ExtensionCaptureService(_extensionFrameStore);
-            _extensionFrameServer = new ExtensionFrameServer(_extensionFrameStore);
-            _extensionFrameServer.ClientConnected += ExtensionFrameServer_ClientConnected;
-            _extensionFrameServer.ClientDisconnected += ExtensionFrameServer_ClientDisconnected;
-            _extensionFrameServer.FrameReceived += ExtensionFrameServer_FrameReceived;
-            _sessionManager = new SessionManager(_stateManager, _sourceWindowManager, _recoveryService, _settingsService);
-            _previewTimer.Interval = TimeSpan.FromMilliseconds(1200);
-            _previewTimer.Tick += PreviewTimer_Tick;
+            _extensionSignalingServer.ClientConnected += ExtensionServer_ClientConnected;
+            _extensionSignalingServer.ClientDisconnected += ExtensionServer_ClientDisconnected;
             Loaded += MainWindow_Loaded;
             Closing += MainWindow_Closing;
             Closed += MainWindow_Closed;
@@ -71,20 +52,25 @@ namespace PlayPane
             RegisterHotkeys();
         }
 
-        private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            handled = _hotkeyService.ProcessWindowMessage(msg, wParam);
+            return IntPtr.Zero;
+        }
+
+        private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
             _settings = _settingsService.Load();
+            _settings.EnsureValid();
+            _settings.CaptureSourceKind = CaptureSourceKind.BrowserExtension;
+            _settings.CaptureMode = CaptureMode.FullWindow;
             _localizer = new LocalizationService(_settings.Language);
+
             ApplyLocalization();
             ApplySettingsToUi();
             CreateTrayIcon();
-            HandlePendingRecovery();
-            RefreshWindowList();
-
-            if (_settings.AutoRestorePreviousSessionOnStartup)
-            {
-                RestorePreviousSession();
-            }
+            await StartExtensionServerAsync().ConfigureAwait(true);
+            await StartPreviewViewerAsync().ConfigureAwait(true);
         }
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
@@ -98,32 +84,15 @@ namespace PlayPane
             }
 
             SaveSettingsFromUi();
-            StopMirroring(true);
+            StopMirroring(false);
         }
 
         private void MainWindow_Closed(object sender, EventArgs e)
         {
             _hotkeyService.Dispose();
+            _ = StopPreviewViewerAsync();
             StopExtensionServer();
-            if (_trayIcon != null)
-            {
-                _trayIcon.Visible = false;
-                _trayIcon.MouseUp -= TrayIcon_MouseUp;
-                _trayIcon.Dispose();
-                _trayIcon = null;
-            }
-
-            if (_trayMenu != null)
-            {
-                _trayMenu.Dispose();
-                _trayMenu = null;
-            }
-        }
-
-        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-        {
-            handled = _hotkeyService.ProcessWindowMessage(msg, wParam);
-            return IntPtr.Zero;
+            DisposeTrayIcon();
         }
 
         private void RegisterHotkeys()
@@ -131,6 +100,7 @@ namespace PlayPane
             if (_settings == null)
             {
                 _settings = _settingsService.Load();
+                _settings.EnsureValid();
             }
 
             if (_localizer == null)
@@ -165,64 +135,15 @@ namespace PlayPane
             {
                 AdjustOpacity(-5);
             }
-            else if (e.Action == HotkeyAction.ReconfigureCrop)
-            {
-                OpenCropEditor();
-            }
             else if (e.Action == HotkeyAction.StopMirroring)
             {
                 StopMirroring(true);
             }
         }
 
-        private void RefreshButton_Click(object sender, RoutedEventArgs e)
+        private void SettingsButton_Click(object sender, RoutedEventArgs e)
         {
-            RefreshWindowList();
-        }
-
-        private void ShowAllWindowsCheckBox_Changed(object sender, RoutedEventArgs e)
-        {
-            RefreshWindowList();
-        }
-
-        private void WindowSearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            ApplyWindowFilter();
-        }
-
-        private void CaptureSourceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (!IsLoaded)
-            {
-                return;
-            }
-
-            UpdateCaptureSourceUi();
-        }
-
-        private void WindowListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            SourceWindowInfo selected = GetSelectedSource();
-            if (selected == null)
-            {
-                SelectedSourceTextBlock.Text = string.Empty;
-                _previewTimer.Stop();
-                return;
-            }
-
-            SelectedSourceTextBlock.Text = selected.DisplayName;
-            if (_stateManager.Current == PlayPaneState.NoSourceSelected)
-            {
-                _stateManager.GoTo(PlayPaneState.Preview);
-            }
-
-            CapturePreviewFrame();
-            _previewTimer.Start();
-        }
-
-        private void PreviewTimer_Tick(object sender, EventArgs e)
-        {
-            CapturePreviewFrame();
+            OpenSettings();
         }
 
         private void StartOverlayButton_Click(object sender, RoutedEventArgs e)
@@ -235,32 +156,16 @@ namespace PlayPane
             StopMirroring(true);
         }
 
-        private void RestoreSourceButton_Click(object sender, RoutedEventArgs e)
-        {
-            _sessionManager.RestoreSource();
-            UpdateStatus(L("Status.SourceRestored"));
-        }
-
-        private void RestorePreviousButton_Click(object sender, RoutedEventArgs e)
-        {
-            RestorePreviousSession();
-        }
-
-        private void SettingsButton_Click(object sender, RoutedEventArgs e)
-        {
-            OpenSettings();
-        }
-
-        private void EditCropButton_Click(object sender, RoutedEventArgs e)
-        {
-            OpenCropEditor();
-        }
-
         private void OpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (OpacityValueTextBlock != null)
             {
                 OpacityValueTextBlock.Text = ((int)e.NewValue) + "%";
+            }
+
+            if (_settings != null)
+            {
+                _settings.OpacityPercent = (int)e.NewValue;
             }
 
             if (_overlayWindow != null)
@@ -269,84 +174,59 @@ namespace PlayPane
             }
         }
 
-        private void RefreshWindowList()
+        private void AspectRatioCheckBox_Changed(object sender, RoutedEventArgs e)
         {
-            _allWindows.Clear();
-            bool showAll = ShowAllWindowsCheckBox.IsChecked == true;
-            foreach (SourceWindowInfo window in _windowEnumerator.Enumerate(showAll))
+            if (!IsLoaded || _settings == null)
             {
-                _allWindows.Add(window);
+                return;
             }
 
-            ApplyWindowFilter();
-            UpdateStatus(_localizer.Format("Status.WindowsFound", _allWindows.Count));
+            _settings.AspectRatioLocked = AspectRatioCheckBox.IsChecked == true;
+            _settingsService.Save(_settings);
+            RestartPreviewViewerIfActive();
         }
 
-        private void ApplyWindowFilter()
+        private void FrameRateComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            string query = (WindowSearchTextBox.Text ?? string.Empty).Trim();
-            IEnumerable<SourceWindowInfo> filtered = _allWindows;
-
-            if (!string.IsNullOrEmpty(query))
+            if (!IsLoaded || _settings == null)
             {
-                filtered = filtered.Where(w =>
-                    Contains(w.Title, query) ||
-                    Contains(w.ProcessName, query) ||
-                    Contains(w.BrowserType.ToString(), query));
+                return;
             }
 
-            WindowListView.ItemsSource = filtered.ToList();
+            _settings.FrameRateMode = ReadFrameRateMode(FrameRateComboBox);
+            _settingsService.Save(_settings);
+            RestartPreviewViewerIfActive();
         }
 
         private async void StartOverlay()
         {
             SaveSettingsFromUi();
-
-            CaptureSession session;
-            IWindowCaptureService activeCaptureService;
-
-            if (_settings.CaptureSourceKind == CaptureSourceKind.BrowserExtension)
+            if (!await StartExtensionServerAsync().ConfigureAwait(true))
             {
-                if (!await StartExtensionServerAsync())
-                {
-                    return;
-                }
-
-                session = _sessionManager.StartBrowserExtension(_settings);
-                activeCaptureService = _extensionCaptureService;
-                ExtensionStatusTextBlock.Text = _localizer.Format("Main.ExtensionServerReady", _extensionFrameServer.WebSocketUri);
-            }
-            else
-            {
-                SourceWindowInfo source = GetSelectedSource();
-                if (source == null)
-                {
-                    UpdateStatus(L("Status.SelectSourceFirst"));
-                    return;
-                }
-
-                session = _sessionManager.Start(source, _settings);
-                activeCaptureService = _captureService;
+                return;
             }
 
+            await StopPreviewViewerAsync().ConfigureAwait(true);
+
+            CaptureSession session = CaptureSession.ForBrowserExtension(_settings);
             if (_overlayWindow == null)
             {
-                _overlayWindow = new OverlayWindow(activeCaptureService, new FrameRateController(), _settingsService);
+                _overlayWindow = new OverlayWindow(_settingsService);
                 _overlayWindow.StopRequested += OverlayWindow_StopRequested;
-                _overlayWindow.CropRequested += OverlayWindow_CropRequested;
                 _overlayWindow.HiddenRequested += OverlayWindow_HiddenRequested;
                 _overlayWindow.Closed += OverlayWindow_Closed;
             }
 
-            _overlayWindow.Configure(session, _settings);
+            _overlayWindow.Configure(session, _settings, _extensionSignalingServer.WebSocketUri);
             _overlayWindow.Show();
             _overlayWindow.Activate();
             _overlayWindow.EnterEditMode();
             Hide();
+            UpdateExtensionStatus();
             UpdateStatus(L("Status.OverlayStarted"));
         }
 
-        private void StopMirroring(bool restoreSource)
+        private void StopMirroring(bool restartPreview)
         {
             if (_isStoppingMirroring)
             {
@@ -356,154 +236,40 @@ namespace PlayPane
             _isStoppingMirroring = true;
             try
             {
-                _previewTimer.Stop();
-
                 OverlayWindow overlay = _overlayWindow;
                 _overlayWindow = null;
                 if (overlay != null)
                 {
-                    overlay.StopRequested -= OverlayWindow_StopRequested;
-                    overlay.CropRequested -= OverlayWindow_CropRequested;
-                    overlay.HiddenRequested -= OverlayWindow_HiddenRequested;
-                    overlay.Closed -= OverlayWindow_Closed;
+                    DetachOverlayEvents(overlay);
+                    _settings.OverlayBounds = new WindowBounds((int)overlay.Left, (int)overlay.Top, (int)overlay.Width, (int)overlay.Height);
                     overlay.StopCapture();
                     overlay.Close();
                 }
 
-                _sessionManager.Stop(restoreSource);
-                StopExtensionServer();
                 SaveSettingsFromUi();
+                UpdateExtensionStatus();
                 UpdateStatus(L("Status.MirroringStopped"));
             }
             finally
             {
                 _isStoppingMirroring = false;
             }
-        }
 
-        private void RestorePreviousSession()
-        {
-            if (_settings == null || _settings.PreviousSource == null)
+            if (restartPreview && !_explicitExit)
             {
-                UpdateStatus(L("Status.NoPreviousSource"));
-                return;
+                _ = StartPreviewViewerAsync();
             }
-
-            SourceWindowInfo previous = _windowEnumerator.FindByPreviousSource(_settings.PreviousSource);
-            if (previous == null)
-            {
-                UpdateStatus(L("Status.PreviousSourceNotFound"));
-                Show();
-                Activate();
-                RefreshWindowList();
-                return;
-            }
-
-            RefreshWindowList();
-            foreach (SourceWindowInfo item in WindowListView.Items)
-            {
-                if (item.HandleValue == previous.HandleValue)
-                {
-                    WindowListView.SelectedItem = item;
-                    break;
-                }
-            }
-
-            StartOverlay();
-        }
-
-        private void OpenCropEditor()
-        {
-            SourceWindowInfo source = GetSelectedSource();
-            if (source == null && _sessionManager.CurrentSession != null)
-            {
-                source = _sessionManager.CurrentSession.Source;
-            }
-
-            if (source == null)
-            {
-                UpdateStatus(L("Status.SelectSourceBeforeCrop"));
-                return;
-            }
-
-            using (Bitmap preview = _captureService.Capture(source, CaptureMode.FullWindow, CropRegion.Full))
-            {
-                var cropWindow = new CropWindow(preview, _settings.CropRegion, _localizer);
-                cropWindow.Owner = this.IsVisible ? this : null;
-                if (cropWindow.ShowDialog() == true)
-                {
-                    _settings.CropRegion = cropWindow.SelectedRegion;
-                    _settings.CaptureMode = CaptureMode.Crop;
-                    CropRadioButton.IsChecked = true;
-                    _settingsService.Save(_settings);
-                    if (_overlayWindow != null)
-                    {
-                        _overlayWindow.UpdateCrop(_settings.CropRegion, _settings.CaptureMode);
-                    }
-
-                    UpdateStatus(L("Status.CropUpdated"));
-                }
-            }
-        }
-
-        private void OpenSettings()
-        {
-            var settingsWindow = new SettingsWindow(_settings, _localizer);
-            settingsWindow.Owner = this;
-            if (settingsWindow.ShowDialog() == true)
-            {
-                _settings.AutoRestorePreviousSessionOnStartup = settingsWindow.AutoRestorePreviousSessionOnStartup;
-                _settings.StartWithWindows = settingsWindow.StartWithWindows;
-                _settings.Language = settingsWindow.SelectedLanguage;
-                _localizer = new LocalizationService(_settings.Language);
-                _settingsService.Save(_settings);
-                RegisterHotkeys();
-                ApplyLocalization();
-                RecreateTrayIcon();
-                if (_overlayWindow != null)
-                {
-                    _overlayWindow.SetLanguage(_settings.Language);
-                }
-
-                UpdateStatus(L("Status.SettingsSaved"));
-            }
-        }
-
-        private void CapturePreviewFrame()
-        {
-            SourceWindowInfo selected = GetSelectedSource();
-            if (selected == null)
-            {
-                return;
-            }
-
-            try
-            {
-                using (Bitmap bitmap = _captureService.Capture(selected, CaptureMode.FullWindow, CropRegion.Full))
-                {
-                    PreviewImage.Source = ImageConversion.ToBitmapSource(bitmap);
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus(ex.Message);
-            }
-        }
-
-        private SourceWindowInfo GetSelectedSource()
-        {
-            return WindowListView.SelectedItem as SourceWindowInfo;
         }
 
         private async Task<bool> StartExtensionServerAsync()
         {
-            // Make sure any in-flight stop has finished before we start.
             await _pendingStopTask.ConfigureAwait(true);
 
             try
             {
-                await _extensionFrameServer.StartAsync().ConfigureAwait(false);
-                UpdateStatus(_localizer.Format("Main.ExtensionServerReady", _extensionFrameServer.WebSocketUri));
+                await _extensionSignalingServer.StartAsync().ConfigureAwait(true);
+                UpdateExtensionStatus();
+                UpdateStatus(_localizer.Format("Main.ExtensionServerReady", _extensionSignalingServer.WebSocketUri));
                 return true;
             }
             catch (Exception ex)
@@ -515,54 +281,113 @@ namespace PlayPane
 
         private void StopExtensionServer()
         {
-            if (!_extensionFrameServer.IsRunning)
+            if (!_extensionSignalingServer.IsRunning)
             {
                 return;
             }
 
-            // Offload to a background thread.  The NotifyIcon (system tray) runs on
-            // the WPF UI thread — blocking it with GetAwaiter().GetResult() freezes
-            // the tray icon for the entire shutdown duration (up to 2 s).
             _pendingStopTask = Task.Run(async () =>
             {
                 try
                 {
-                    await _extensionFrameServer.StopAsync().ConfigureAwait(false);
+                    await _extensionSignalingServer.StopAsync().ConfigureAwait(false);
                 }
                 catch
                 {
-                    // Best-effort shutdown; keep exit resilient.
+                    // Shutdown is best effort while the WPF dispatcher is closing.
                 }
             });
         }
 
-        private void ExtensionFrameServer_ClientConnected(object sender, EventArgs e)
+        private async Task StartPreviewViewerAsync()
+        {
+            if (_overlayWindow != null || _explicitExit)
+            {
+                return;
+            }
+
+            if (!await StartExtensionServerAsync().ConfigureAwait(true))
+            {
+                PreviewStatusTextBlock.Text = L("Main.PreviewPaused");
+                return;
+            }
+
+            try
+            {
+                await PreviewWebView.EnsureCoreWebView2Async().ConfigureAwait(true);
+                PreviewWebView.DefaultBackgroundColor = Drawing.Color.FromArgb(2, 6, 23);
+                PreviewWebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+                PreviewWebView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                PreviewWebView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+                PreviewWebView.CoreWebView2.NavigateToString(WebRtcViewerPage.Build(
+                    _extensionSignalingServer.WebSocketUri,
+                    L("Overlay.WebRtcWaiting"),
+                    _settings.AspectRatioLocked,
+                    100,
+                    _frameRateController.GetFramesPerSecond(_settings.FrameRateMode)));
+                _isPreviewViewerActive = true;
+                PreviewStatusTextBlock.Text = L("Main.PreviewWaiting");
+                UpdateExtensionStatus();
+            }
+            catch (Exception ex)
+            {
+                _isPreviewViewerActive = false;
+                PreviewStatusTextBlock.Text = L("Main.PreviewPaused");
+                UpdateStatus(ex.Message);
+            }
+        }
+
+        private async Task StopPreviewViewerAsync()
+        {
+            try
+            {
+                if (PreviewWebView.CoreWebView2 != null)
+                {
+                    await PreviewWebView.CoreWebView2.ExecuteScriptAsync("window.playPaneStopViewer && window.playPaneStopViewer();").ConfigureAwait(true);
+                    await Task.Delay(80).ConfigureAwait(true);
+                    PreviewWebView.CoreWebView2.NavigateToString(WebRtcViewerPage.Blank);
+                }
+            }
+            catch
+            {
+                // The WebView may be closing or not fully initialized.
+            }
+            finally
+            {
+                _isPreviewViewerActive = false;
+                if (PreviewStatusTextBlock != null)
+                {
+                    PreviewStatusTextBlock.Text = L("Main.PreviewPaused");
+                }
+            }
+        }
+
+        private async void RestartPreviewViewerIfActive()
+        {
+            if (!_isPreviewViewerActive || _overlayWindow != null)
+            {
+                return;
+            }
+
+            await StopPreviewViewerAsync().ConfigureAwait(true);
+            await StartPreviewViewerAsync().ConfigureAwait(true);
+        }
+
+        private void ExtensionServer_ClientConnected(object sender, EventArgs e)
         {
             Dispatcher.BeginInvoke(new Action(delegate
             {
+                UpdateExtensionStatus();
                 UpdateStatus(L("Status.ExtensionClientConnected"));
             }));
         }
 
-        private void ExtensionFrameServer_ClientDisconnected(object sender, EventArgs e)
+        private void ExtensionServer_ClientDisconnected(object sender, EventArgs e)
         {
             Dispatcher.BeginInvoke(new Action(delegate
             {
+                UpdateExtensionStatus();
                 UpdateStatus(L("Status.ExtensionClientDisconnected"));
-            }));
-        }
-
-        private void ExtensionFrameServer_FrameReceived(object sender, ExtensionFrameReceivedEventArgs e)
-        {
-            Dispatcher.BeginInvoke(new Action(delegate
-            {
-                if (_settings != null &&
-                    _settings.CaptureSourceKind == CaptureSourceKind.BrowserExtension &&
-                    DateTime.UtcNow - _lastExtensionStatusUtc > TimeSpan.FromSeconds(2))
-                {
-                    _lastExtensionStatusUtc = DateTime.UtcNow;
-                    UpdateStatus(L("Status.ExtensionFrameReceived"));
-                }
             }));
         }
 
@@ -570,12 +395,8 @@ namespace PlayPane
         {
             OpacitySlider.Value = _settings.OpacityPercent;
             AspectRatioCheckBox.IsChecked = _settings.AspectRatioLocked;
-            FullWindowRadioButton.IsChecked = _settings.CaptureMode == CaptureMode.FullWindow;
-            CropRadioButton.IsChecked = _settings.CaptureMode == CaptureMode.Crop;
-            SelectComboItem(CaptureSourceComboBox, _settings.CaptureSourceKind.ToString());
             SelectComboItem(FrameRateComboBox, _settings.FrameRateMode.ToString());
-            SelectPlacementItem();
-            UpdateCaptureSourceUi();
+            UpdateExtensionStatus();
         }
 
         private void SaveSettingsFromUi()
@@ -587,11 +408,10 @@ namespace PlayPane
 
             _settings.OpacityPercent = (int)OpacitySlider.Value;
             _settings.AspectRatioLocked = AspectRatioCheckBox.IsChecked == true;
-            _settings.Language = _localizer == null ? _settings.Language : _localizer.Language;
-            _settings.CaptureMode = CropRadioButton.IsChecked == true ? CaptureMode.Crop : CaptureMode.FullWindow;
-            _settings.CaptureSourceKind = ReadCaptureSourceKind();
             _settings.FrameRateMode = ReadFrameRateMode(FrameRateComboBox);
-            _settings.SourcePlacement = ReadPlacementOptions();
+            _settings.CaptureSourceKind = CaptureSourceKind.BrowserExtension;
+            _settings.CaptureMode = CaptureMode.FullWindow;
+            _settings.Language = _localizer == null ? _settings.Language : _localizer.Language;
 
             if (_overlayWindow != null)
             {
@@ -601,36 +421,28 @@ namespace PlayPane
             _settingsService.Save(_settings);
         }
 
-        private void SelectPlacementItem()
+        private void OpenSettings()
         {
-            string tag = "KeepOriginalPosition";
-            if (_settings.SourcePlacement.Mode == SourcePlacementMode.MoveToScreenEdge)
+            var settingsWindow = new SettingsWindow(_settings, _localizer);
+            settingsWindow.Owner = this;
+            if (settingsWindow.ShowDialog() == true)
             {
-                tag = "MoveRightEdge";
-            }
-            else if (_settings.SourcePlacement.Mode == SourcePlacementMode.MoveMostlyOffScreen)
-            {
-                tag = "MoveMostlyOffScreen";
-            }
+                _settings.StartWithWindows = settingsWindow.StartWithWindows;
+                _settings.Language = settingsWindow.SelectedLanguage;
+                _settings.CaptureSourceKind = CaptureSourceKind.BrowserExtension;
+                _localizer = new LocalizationService(_settings.Language);
+                _settingsService.Save(_settings);
+                RegisterHotkeys();
+                ApplyLocalization();
+                RecreateTrayIcon();
+                if (_overlayWindow != null)
+                {
+                    _overlayWindow.SetLanguage(_settings.Language);
+                }
 
-            SelectComboItem(PlacementComboBox, tag);
-        }
-
-        private SourcePlacementOptions ReadPlacementOptions()
-        {
-            var options = new SourcePlacementOptions();
-            string tag = ReadSelectedTag(PlacementComboBox);
-            if (tag == "MoveRightEdge")
-            {
-                options.Mode = SourcePlacementMode.MoveToScreenEdge;
-                options.Edge = ScreenEdge.Right;
+                RestartPreviewViewerIfActive();
+                UpdateStatus(L("Status.SettingsSaved"));
             }
-            else if (tag == "MoveMostlyOffScreen")
-            {
-                options.Mode = SourcePlacementMode.MoveMostlyOffScreen;
-            }
-
-            return options;
         }
 
         private static FrameRateMode ReadFrameRateMode(ComboBox comboBox)
@@ -643,39 +455,6 @@ namespace PlayPane
             }
 
             return FrameRateMode.Standard;
-        }
-
-        private CaptureSourceKind ReadCaptureSourceKind()
-        {
-            string tag = ReadSelectedTag(CaptureSourceComboBox);
-            CaptureSourceKind value;
-            if (Enum.TryParse(tag, out value))
-            {
-                return value;
-            }
-
-            return CaptureSourceKind.Window;
-        }
-
-        private bool IsExtensionCaptureSelected()
-        {
-            return ReadCaptureSourceKind() == CaptureSourceKind.BrowserExtension;
-        }
-
-        private void UpdateCaptureSourceUi()
-        {
-            bool extension = IsExtensionCaptureSelected();
-            WindowListView.IsEnabled = !extension;
-            WindowSearchTextBox.IsEnabled = !extension;
-            ShowAllWindowsCheckBox.IsEnabled = !extension;
-            RefreshButton.IsEnabled = !extension;
-            RestorePreviousButton.IsEnabled = !extension;
-            RestoreSourceButton.IsEnabled = !extension;
-            PlacementComboBox.IsEnabled = !extension;
-
-            ExtensionStatusTextBlock.Text = extension
-                ? (_extensionFrameServer.IsRunning ? _localizer.Format("Main.ExtensionServerReady", _extensionFrameServer.WebSocketUri) : L("Main.ExtensionWaiting"))
-                : string.Empty;
         }
 
         private static string ReadSelectedTag(ComboBox comboBox)
@@ -701,6 +480,7 @@ namespace PlayPane
         {
             if (_overlayWindow == null)
             {
+                StartOverlay();
                 return;
             }
 
@@ -739,28 +519,8 @@ namespace PlayPane
             {
                 _overlayWindow.SetOpacityPercent(value);
             }
-        }
 
-        private void HandlePendingRecovery()
-        {
-            if (!_recoveryService.HasPendingSession)
-            {
-                return;
-            }
-
-            MessageBoxResult result = MessageBox.Show(
-                L("Recovery.Prompt"),
-                L("Recovery.Title"),
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-
-            if (result == MessageBoxResult.Yes)
-            {
-                WindowPlacementSnapshot snapshot = _recoveryService.Load();
-                _sourceWindowManager.Restore(snapshot);
-                _recoveryService.Clear();
-                UpdateStatus(L("Status.RecoveredSource"));
-            }
+            SaveSettingsFromUi();
         }
 
         private void CreateTrayIcon()
@@ -772,19 +532,28 @@ namespace PlayPane
 
             _trayIcon = new Forms.NotifyIcon();
             _trayIcon.Text = "PlayPane";
-            _trayIcon.Icon = System.Drawing.SystemIcons.Application;
+            _trayIcon.Icon = Drawing.SystemIcons.Application;
             _trayIcon.Visible = true;
             _trayIcon.DoubleClick += delegate { QueueUiAction(ShowControlPanel); };
             _trayIcon.MouseUp += TrayIcon_MouseUp;
 
             _trayMenu = new Forms.ContextMenuStrip();
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.ShowControlPanel"), ShowControlPanel));
-            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.ShowOverlay"), delegate { if (_overlayWindow != null) _overlayWindow.Show(); }));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.ShowOverlay"), delegate
+            {
+                if (_overlayWindow == null)
+                {
+                    StartOverlay();
+                }
+                else
+                {
+                    _overlayWindow.Show();
+                }
+            }));
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.HideOverlay"), delegate { if (_overlayWindow != null) _overlayWindow.Hide(); }));
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.EnterEditMode"), delegate { if (_overlayWindow != null) _overlayWindow.EnterEditMode(); }));
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.EnterGameMode"), delegate { if (_overlayWindow != null) _overlayWindow.EnterGameMode(); }));
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.StopMirroring"), delegate { StopMirroring(true); }));
-            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.RestoreSource"), delegate { _sessionManager.RestoreSource(); }));
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.Settings"), OpenSettings));
             _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.Exit"), ExitApplication));
         }
@@ -831,6 +600,12 @@ namespace PlayPane
 
         private void RecreateTrayIcon()
         {
+            DisposeTrayIcon();
+            CreateTrayIcon();
+        }
+
+        private void DisposeTrayIcon()
+        {
             if (_trayIcon != null)
             {
                 _trayIcon.Visible = false;
@@ -844,8 +619,6 @@ namespace PlayPane
                 _trayMenu.Dispose();
                 _trayMenu = null;
             }
-
-            CreateTrayIcon();
         }
 
         private void ShowControlPanel()
@@ -867,12 +640,6 @@ namespace PlayPane
             ShowControlPanel();
         }
 
-        private void OverlayWindow_CropRequested(object sender, EventArgs e)
-        {
-            ShowControlPanel();
-            OpenCropEditor();
-        }
-
         private void OverlayWindow_HiddenRequested(object sender, EventArgs e)
         {
             UpdateStatus(L("Status.OverlayHidden"));
@@ -880,16 +647,53 @@ namespace PlayPane
 
         private void OverlayWindow_Closed(object sender, EventArgs e)
         {
-            if (_overlayWindow != null)
+            OverlayWindow overlay = sender as OverlayWindow;
+            if (overlay != null)
             {
-                _overlayWindow.StopCapture();
+                DetachOverlayEvents(overlay);
+                overlay.StopCapture();
+            }
+
+            if (_overlayWindow == overlay)
+            {
                 _overlayWindow = null;
             }
+
+            if (!_isStoppingMirroring && !_explicitExit)
+            {
+                SaveSettingsFromUi();
+                UpdateStatus(L("Status.MirroringStopped"));
+                _ = StartPreviewViewerAsync();
+            }
+        }
+
+        private void DetachOverlayEvents(OverlayWindow overlay)
+        {
+            overlay.StopRequested -= OverlayWindow_StopRequested;
+            overlay.HiddenRequested -= OverlayWindow_HiddenRequested;
+            overlay.Closed -= OverlayWindow_Closed;
+        }
+
+        private void UpdateExtensionStatus()
+        {
+            if (ExtensionStatusTextBlock == null)
+            {
+                return;
+            }
+
+            SignalingAddressTextBox.Text = _extensionSignalingServer.WebSocketUri.ToString();
+            ExtensionStatusTextBlock.Text = _extensionSignalingServer.IsRunning
+                ? _localizer.Format("Main.ExtensionServerReady", _extensionSignalingServer.WebSocketUri)
+                : L("Main.ExtensionWaiting");
         }
 
         private void UpdateStatus(string message)
         {
-            StatusTextBlock.Text = message;
+            if (StatusTextBlock != null)
+            {
+                StatusTextBlock.Text = message;
+            }
+
             if (_trayIcon != null)
             {
                 _trayIcon.Text = message.Length > 63 ? message.Substring(0, 63) : message;
@@ -909,43 +713,24 @@ namespace PlayPane
         private void ApplyLocalization()
         {
             Title = L("Main.Title");
-            RestorePreviousButton.Content = L("Main.RestorePrevious");
             SettingsButton.Content = L("Main.Settings");
             SubtitleTextBlock.Text = L("Main.Subtitle");
-            RefreshButton.Content = L("Main.Refresh");
-            ShowAllWindowsCheckBox.Content = L("Main.ShowAllWindows");
-            BrowserColumn.Header = L("Main.ColumnBrowser");
-            TitleColumn.Header = L("Main.ColumnTitle");
-            ProcessColumn.Header = L("Main.ColumnProcess");
-            MonitorColumn.Header = L("Main.ColumnMonitor");
-            SourcePreviewLabel.Text = L("Main.SourcePreview");
-            CaptureSourceLabel.Text = L("Main.CaptureSource");
-            WindowCaptureSourceItem.Content = L("Main.WindowCaptureSource");
-            ExtensionCaptureSourceItem.Content = L("Main.ExtensionCaptureSource");
-            MirroringLabel.Text = L("Main.Mirroring");
-            FullWindowRadioButton.Content = L("Main.FullWindow");
-            CropRadioButton.Content = L("Main.CropRegion");
-            EditCropButton.Content = L("Main.EditCrop");
+            PreviewTitleTextBlock.Text = L("Main.SourcePreview");
+            PreviewStatusTextBlock.Text = _isPreviewViewerActive ? L("Main.PreviewWaiting") : L("Main.PreviewPaused");
+            ExtensionLabelTextBlock.Text = L("Main.ExtensionCaptureSource");
+            SignalingAddressLabel.Text = L("Main.SignalingAddress");
+            InstructionsLabel.Text = L("Main.Instructions");
+            InstructionsTextBlock.Text = L("Main.ExtensionInstructions");
             FrameRateLabel.Text = L("Main.FrameRate");
             FrameRateLowItem.Content = L("Main.FrameRateLow");
             FrameRateStandardItem.Content = L("Main.FrameRateStandard");
             FrameRateSmoothItem.Content = L("Main.FrameRateSmooth");
             OpacityLabel.Text = L("Main.Opacity");
             AspectRatioCheckBox.Content = L("Main.LockAspectRatio");
-            SourcePlacementLabel.Text = L("Main.SourcePlacement");
-            KeepOriginalPositionItem.Content = L("Main.KeepOriginalPosition");
-            MoveRightEdgeItem.Content = L("Main.MoveRightEdge");
-            MoveMostlyOffScreenItem.Content = L("Main.MoveMostlyOffScreen");
             StartOverlayButton.Content = L("Main.StartOverlay");
             StopMirroringButton.Content = L("Main.StopMirroring");
-            RestoreSourceButton.Content = L("Main.RestoreSource");
-
-            StatusTextBlock.Text = L("App.Ready");
-        }
-
-        private static bool Contains(string value, string query)
-        {
-            return value != null && value.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+            UpdateExtensionStatus();
+            UpdateStatus(L("App.Ready"));
         }
     }
 }

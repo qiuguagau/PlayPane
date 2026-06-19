@@ -13,4 +13,8 @@
   <ItemGroup>
     <ProjectReference Include="..\PlayPane.Core\PlayPane.Core.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49" />
+  </ItemGroup>
 </Project>

@@ -51,5 +51,12 @@ namespace PlayPane.Tests
 
             Directory.Delete(directory, true);
         }
+
+        public static void DefaultsToBrowserExtensionCapture()
+        {
+            var settings = AppSettings.CreateDefault();
+
+            TestAssert.Equal(CaptureSourceKind.BrowserExtension, settings.CaptureSourceKind, "PlayPane should default to the Chrome/Edge extension capture route.");
+        }
     }
 }

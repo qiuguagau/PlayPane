@@ -18,13 +18,11 @@
                 <ComboBoxItem x:Name="EnglishItem" Tag="English" Content="English" />
                 <ComboBoxItem x:Name="SimplifiedChineseItem" Tag="SimplifiedChinese" Content="Simplified Chinese" />
             </ComboBox>
-            <CheckBox x:Name="AutoRestoreCheckBox" Content="Automatically restore the previous session on startup" />
             <CheckBox x:Name="StartWithWindowsCheckBox" Content="Start with Windows" IsEnabled="False" />
             <TextBlock x:Name="GlobalShortcutsLabel" Text="Global shortcuts" FontSize="18" FontWeight="SemiBold" Margin="0,24,0,8" />
             <TextBlock x:Name="ShortcutToggleOverlayText" Text="Ctrl + Alt + O: Show or hide overlay" />
             <TextBlock x:Name="ShortcutToggleModeText" Text="Ctrl + Alt + E: Switch Edit/Game Mode" />
             <TextBlock x:Name="ShortcutOpacityText" Text="Ctrl + Alt + Up/Down: Adjust opacity" />
-            <TextBlock x:Name="ShortcutCropText" Text="Ctrl + Alt + R: Reconfigure crop" />
             <TextBlock x:Name="ShortcutStopText" Text="Ctrl + Alt + Q: Stop mirroring" />
         </StackPanel>
         <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">

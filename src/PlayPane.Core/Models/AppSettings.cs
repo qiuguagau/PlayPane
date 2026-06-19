@@ -62,7 +62,7 @@ namespace PlayPane.Core.Models
             settings.AutoRestorePreviousSessionOnStartup = false;
             settings.StartWithWindows = false;
             settings.Language = AppLanguage.English;
-            settings.CaptureSourceKind = CaptureSourceKind.Window;
+            settings.CaptureSourceKind = CaptureSourceKind.BrowserExtension;
             settings.Shortcuts = CreateDefaultShortcuts();
             return settings;
         }
@@ -119,7 +119,7 @@ namespace PlayPane.Core.Models
 
             if (CaptureSourceKind != CaptureSourceKind.Window && CaptureSourceKind != CaptureSourceKind.BrowserExtension)
             {
-                CaptureSourceKind = CaptureSourceKind.Window;
+                CaptureSourceKind = CaptureSourceKind.BrowserExtension;
             }
         }
 
@@ -132,7 +132,6 @@ namespace PlayPane.Core.Models
                 new ShortcutBinding(HotkeyAction.ToggleEditGameMode, new ShortcutDefinition(modifiers, 69)),
                 new ShortcutBinding(HotkeyAction.IncreaseOpacity, new ShortcutDefinition(modifiers, 38)),
                 new ShortcutBinding(HotkeyAction.DecreaseOpacity, new ShortcutDefinition(modifiers, 40)),
-                new ShortcutBinding(HotkeyAction.ReconfigureCrop, new ShortcutDefinition(modifiers, 82)),
                 new ShortcutBinding(HotkeyAction.StopMirroring, new ShortcutDefinition(modifiers, 81))
             };
         }

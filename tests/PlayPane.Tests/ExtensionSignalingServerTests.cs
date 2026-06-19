@@ -2,7 +2,9 @@ using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 using System.Threading;
 using PlayPane.Core.Capture;
 
@@ -102,6 +104,27 @@ namespace PlayPane.Tests
                 string received = ReceiveText(source, TimeSpan.FromSeconds(3));
 
                 TestAssert.Equal(ready, received, "Source should receive queued viewer-ready when it connects.");
+                server.StopAsync().GetAwaiter().GetResult();
+            }
+        }
+
+        public static void RequestsSourceCaptureStopOnDesktopExit()
+        {
+            int port = GetFreeTcpPort();
+            using (var server = new ExtensionSignalingServer(port))
+            using (var source = new ClientWebSocket())
+            {
+                server.StartAsync().GetAwaiter().GetResult();
+                source.ConnectAsync(server.WebSocketUri, CancellationToken.None).GetAwaiter().GetResult();
+                SendText(source, "{\"role\":\"source\",\"type\":\"hello\"}");
+
+                MethodInfo method = typeof(ExtensionSignalingServer).GetMethod("RequestSourceCaptureStopAsync");
+                TestAssert.True(method != null, "Signaling server should expose an explicit desktop-exit source stop request.");
+
+                ((Task)method.Invoke(server, null)).GetAwaiter().GetResult();
+
+                string received = ReceiveText(source, TimeSpan.FromSeconds(3));
+                TestAssert.Equal("{\"role\":\"viewer\",\"type\":\"desktop-exiting\"}", received, "Source should receive a desktop-exiting signal before the server shuts down.");
                 server.StopAsync().GetAwaiter().GetResult();
             }
         }

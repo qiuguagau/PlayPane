@@ -10,10 +10,11 @@
         WindowStartupLocation="Manual"
         ResizeMode="CanResizeWithGrip"
         WindowStyle="None"
+        AllowsTransparency="True"
         ShowInTaskbar="True"
         Topmost="False"
         Background="Transparent">
-    <Border x:Name="OuterBorder" BorderBrush="#2B6EF3" BorderThickness="2" Background="#020617">
+    <Border x:Name="OuterBorder" BorderBrush="#2B6EF3" BorderThickness="2" Background="Transparent">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />

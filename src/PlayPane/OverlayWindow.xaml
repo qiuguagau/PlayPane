@@ -23,11 +23,11 @@
             <wv2:WebView2 x:Name="WebRtcView" Grid.Row="1" />
 
             <Border x:Name="Toolbar" Grid.Row="0" Background="#EFFFFFFF" BorderBrush="#B6C2D4" BorderThickness="0,0,0,1" Padding="6" MouseLeftButtonDown="Toolbar_MouseLeftButtonDown">
-                <DockPanel LastChildFill="False">
-                    <TextBlock x:Name="ToolbarTitle" Text="PlayPane Overlay" VerticalAlignment="Center" FontWeight="SemiBold" Margin="4,0,12,0" />
-                    <TextBlock x:Name="OpacityLabel" Text="Opacity" VerticalAlignment="Center" />
-                    <Slider x:Name="OpacitySlider" Width="120" Minimum="10" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="OpacitySlider_ValueChanged" Margin="6,0,12,0" />
-                    <ComboBox x:Name="FrameRateComboBox" Width="150" SelectionChanged="FrameRateComboBox_SelectionChanged">
+                <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock x:Name="ToolbarTitle" Text="PlayPane Overlay" VerticalAlignment="Center" FontWeight="SemiBold" Margin="4,2,12,2" />
+                    <TextBlock x:Name="OpacityLabel" Text="Opacity" VerticalAlignment="Center" Margin="0,2,0,2" />
+                    <Slider x:Name="OpacitySlider" Width="96" Minimum="10" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="OpacitySlider_ValueChanged" Margin="6,2,12,2" />
+                    <ComboBox x:Name="FrameRateComboBox" Width="112" SelectionChanged="FrameRateComboBox_SelectionChanged" Margin="0,2,6,2">
                         <ComboBoxItem Content="15 FPS" Tag="LowResource" />
                         <ComboBoxItem Content="30 FPS" Tag="Standard" IsSelected="True" />
                         <ComboBoxItem Content="60 FPS" Tag="Smooth" />
@@ -35,7 +35,7 @@
                     <Button x:Name="LockButton" Content="Lock" Click="LockButton_Click" />
                     <Button x:Name="HideButton" Content="Hide" Click="HideButton_Click" />
                     <Button x:Name="StopButton" Content="Stop" Click="StopButton_Click" />
-                </DockPanel>
+                </WrapPanel>
             </Border>
 
             <Border x:Name="WarningBorder" Grid.Row="1" Visibility="Collapsed" VerticalAlignment="Bottom" Margin="12" Padding="8" Background="#DDEB5646" CornerRadius="4">

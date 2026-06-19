@@ -1,5 +1,7 @@
 # PlayPane
 
+[简体中文](README.zh-CN.md)
+
 PlayPane is a Windows desktop utility for mirroring a Chrome or Microsoft Edge tab into an always-on-top overlay for windowed or borderless fullscreen games.
 
 ## Current MVP

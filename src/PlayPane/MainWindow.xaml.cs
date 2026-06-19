@@ -361,7 +361,7 @@ namespace PlayPane
 
             try
             {
-                await PreviewWebView.EnsureCoreWebView2Async().ConfigureAwait(true);
+                await PreviewWebView.EnsureCoreWebView2Async(await WebView2Runtime.GetEnvironmentAsync().ConfigureAwait(true)).ConfigureAwait(true);
                 PreviewWebView.DefaultBackgroundColor = Drawing.Color.FromArgb(2, 6, 23);
                 PreviewWebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
                 PreviewWebView.CoreWebView2.Settings.AreDevToolsEnabled = false;

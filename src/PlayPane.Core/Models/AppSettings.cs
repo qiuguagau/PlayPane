@@ -46,6 +46,9 @@ namespace PlayPane.Core.Models
         [DataMember(Order = 12)]
         public AppLanguage Language { get; set; }
 
+        [DataMember(Order = 13)]
+        public CaptureSourceKind CaptureSourceKind { get; set; }
+
         public static AppSettings CreateDefault()
         {
             var settings = new AppSettings();
@@ -59,6 +62,7 @@ namespace PlayPane.Core.Models
             settings.AutoRestorePreviousSessionOnStartup = false;
             settings.StartWithWindows = false;
             settings.Language = AppLanguage.English;
+            settings.CaptureSourceKind = CaptureSourceKind.Window;
             settings.Shortcuts = CreateDefaultShortcuts();
             return settings;
         }
@@ -111,6 +115,11 @@ namespace PlayPane.Core.Models
             if (Language != AppLanguage.English && Language != AppLanguage.SimplifiedChinese)
             {
                 Language = AppLanguage.English;
+            }
+
+            if (CaptureSourceKind != CaptureSourceKind.Window && CaptureSourceKind != CaptureSourceKind.BrowserExtension)
+            {
+                CaptureSourceKind = CaptureSourceKind.Window;
             }
         }
 

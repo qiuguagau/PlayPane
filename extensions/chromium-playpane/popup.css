@@ -1,0 +1,48 @@
+html {
+  min-width: 260px;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #172033;
+}
+
+body {
+  margin: 0;
+  background: #f5f7fb;
+}
+
+main {
+  padding: 14px;
+}
+
+h1 {
+  font-size: 16px;
+  margin: 0 0 10px;
+}
+
+#status {
+  min-height: 20px;
+  margin: 0 0 12px;
+  color: #536071;
+}
+
+button {
+  width: 100%;
+  min-height: 34px;
+  margin: 4px 0;
+  border: 0;
+  border-radius: 6px;
+  background: #2b6ef3;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button + button {
+  background: #536071;
+}
+
+.hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #687386;
+}

@@ -16,6 +16,7 @@ namespace PlayPane.Tests
             settings.OpacityPercent = 55;
             settings.FrameRateMode = FrameRateMode.Smooth;
             settings.Language = AppLanguage.SimplifiedChinese;
+            settings.CaptureSourceKind = CaptureSourceKind.BrowserExtension;
             settings.CropRegion = CropRegion.FromPixels(10, 20, 200, 100, 1000, 500);
             settings.OverlayBounds = new WindowBounds(11, 22, 333, 222);
             settings.PreviousSource = new PreviousSourceWindow("chrome", BrowserType.Chrome, "Guide", new WindowBounds(1, 2, 3, 4));
@@ -26,6 +27,7 @@ namespace PlayPane.Tests
             TestAssert.Equal(55, loaded.OpacityPercent, "Opacity should round-trip.");
             TestAssert.Equal(FrameRateMode.Smooth, loaded.FrameRateMode, "Frame rate should round-trip.");
             TestAssert.Equal(AppLanguage.SimplifiedChinese, loaded.Language, "Language should round-trip.");
+            TestAssert.Equal(CaptureSourceKind.BrowserExtension, loaded.CaptureSourceKind, "Capture source should round-trip.");
             TestAssert.Equal(11, loaded.OverlayBounds.X, "Overlay x should round-trip.");
             TestAssert.Equal(BrowserType.Chrome, loaded.PreviousSource.BrowserType, "Previous browser should round-trip.");
             TestAssert.Near(settings.CropRegion.X, loaded.CropRegion.X, 0.0001, "Crop x should round-trip.");

@@ -18,6 +18,7 @@ PlayPane is a Windows desktop utility for mirroring an existing browser window i
   - `Ctrl + Alt + Q`: stop mirroring
 - Saves local settings under the current user's application data folder.
 - Supports English and Simplified Chinese UI language selection from Settings.
+- Supports Chrome/Edge extension capture through the unpacked extension in `extensions/chromium-playpane`.
 - Saves a temporary recovery file before moving the source window and offers recovery on next launch.
 - Provides a system tray menu for common actions.
 
@@ -31,6 +32,19 @@ dotnet run --project tests\PlayPane.Tests\PlayPane.Tests.csproj
 dotnet run --project src\PlayPane\PlayPane.csproj -- --smoke-test
 dotnet run --project src\PlayPane\PlayPane.csproj
 ```
+
+## Chrome/Edge Extension Capture
+
+Use this mode when the browser window may be minimized or otherwise unavailable to normal window capture.
+
+1. Build and start PlayPane.
+2. In PlayPane, set Capture source to Chrome/Edge Extension Capture.
+3. Click Start Overlay. PlayPane starts a local WebSocket server at `ws://127.0.0.1:17632/playpane`.
+4. In Chrome or Edge, open `chrome://extensions` or `edge://extensions`.
+5. Enable Developer mode and load the unpacked extension folder `extensions/chromium-playpane`.
+6. Open the target tab, click the PlayPane Capture extension icon, then click Start current tab.
+
+The extension captures the current tab with Chrome's `tabCapture` API and streams JPEG frames to the desktop app.
 
 ## Notes
 

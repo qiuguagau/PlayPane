@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -25,19 +26,31 @@ namespace PlayPane
         private readonly StateManager _stateManager = new StateManager();
         private readonly SourceWindowManager _sourceWindowManager = new SourceWindowManager();
         private readonly WindowCaptureService _captureService = new WindowCaptureService();
+        private readonly ExtensionFrameStore _extensionFrameStore = new ExtensionFrameStore();
         private readonly GlobalHotkeyService _hotkeyService = new GlobalHotkeyService();
         private readonly DispatcherTimer _previewTimer = new DispatcherTimer();
         private readonly List<SourceWindowInfo> _allWindows = new List<SourceWindowInfo>();
+        private readonly ExtensionCaptureService _extensionCaptureService;
+        private readonly ExtensionFrameServer _extensionFrameServer;
         private SessionManager _sessionManager;
         private AppSettings _settings;
         private OverlayWindow _overlayWindow;
         private Forms.NotifyIcon _trayIcon;
+        private Forms.ContextMenuStrip _trayMenu;
         private bool _explicitExit;
         private LocalizationService _localizer;
+        private DateTime _lastExtensionStatusUtc = DateTime.MinValue;
+        private bool _isStoppingMirroring;
+        private Task _pendingStopTask = Task.CompletedTask;
 
         public MainWindow()
         {
             InitializeComponent();
+            _extensionCaptureService = new ExtensionCaptureService(_extensionFrameStore);
+            _extensionFrameServer = new ExtensionFrameServer(_extensionFrameStore);
+            _extensionFrameServer.ClientConnected += ExtensionFrameServer_ClientConnected;
+            _extensionFrameServer.ClientDisconnected += ExtensionFrameServer_ClientDisconnected;
+            _extensionFrameServer.FrameReceived += ExtensionFrameServer_FrameReceived;
             _sessionManager = new SessionManager(_stateManager, _sourceWindowManager, _recoveryService, _settingsService);
             _previewTimer.Interval = TimeSpan.FromMilliseconds(1200);
             _previewTimer.Tick += PreviewTimer_Tick;
@@ -91,10 +104,19 @@ namespace PlayPane
         private void MainWindow_Closed(object sender, EventArgs e)
         {
             _hotkeyService.Dispose();
+            StopExtensionServer();
             if (_trayIcon != null)
             {
                 _trayIcon.Visible = false;
+                _trayIcon.MouseUp -= TrayIcon_MouseUp;
                 _trayIcon.Dispose();
+                _trayIcon = null;
+            }
+
+            if (_trayMenu != null)
+            {
+                _trayMenu.Dispose();
+                _trayMenu = null;
             }
         }
 
@@ -166,6 +188,16 @@ namespace PlayPane
         private void WindowSearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
         {
             ApplyWindowFilter();
+        }
+
+        private void CaptureSourceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!IsLoaded)
+            {
+                return;
+            }
+
+            UpdateCaptureSourceUi();
         }
 
         private void WindowListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -266,21 +298,40 @@ namespace PlayPane
             WindowListView.ItemsSource = filtered.ToList();
         }
 
-        private void StartOverlay()
+        private async void StartOverlay()
         {
-            SourceWindowInfo source = GetSelectedSource();
-            if (source == null)
-            {
-                UpdateStatus(L("Status.SelectSourceFirst"));
-                return;
-            }
-
             SaveSettingsFromUi();
-            CaptureSession session = _sessionManager.Start(source, _settings);
+
+            CaptureSession session;
+            IWindowCaptureService activeCaptureService;
+
+            if (_settings.CaptureSourceKind == CaptureSourceKind.BrowserExtension)
+            {
+                if (!await StartExtensionServerAsync())
+                {
+                    return;
+                }
+
+                session = _sessionManager.StartBrowserExtension(_settings);
+                activeCaptureService = _extensionCaptureService;
+                ExtensionStatusTextBlock.Text = _localizer.Format("Main.ExtensionServerReady", _extensionFrameServer.WebSocketUri);
+            }
+            else
+            {
+                SourceWindowInfo source = GetSelectedSource();
+                if (source == null)
+                {
+                    UpdateStatus(L("Status.SelectSourceFirst"));
+                    return;
+                }
+
+                session = _sessionManager.Start(source, _settings);
+                activeCaptureService = _captureService;
+            }
 
             if (_overlayWindow == null)
             {
-                _overlayWindow = new OverlayWindow(_captureService, new FrameRateController(), _settingsService);
+                _overlayWindow = new OverlayWindow(activeCaptureService, new FrameRateController(), _settingsService);
                 _overlayWindow.StopRequested += OverlayWindow_StopRequested;
                 _overlayWindow.CropRequested += OverlayWindow_CropRequested;
                 _overlayWindow.HiddenRequested += OverlayWindow_HiddenRequested;
@@ -297,18 +348,37 @@ namespace PlayPane
 
         private void StopMirroring(bool restoreSource)
         {
-            _previewTimer.Stop();
-
-            if (_overlayWindow != null)
+            if (_isStoppingMirroring)
             {
-                _overlayWindow.StopCapture();
-                _overlayWindow.Close();
-                _overlayWindow = null;
+                return;
             }
 
-            _sessionManager.Stop(restoreSource);
-            SaveSettingsFromUi();
-            UpdateStatus(L("Status.MirroringStopped"));
+            _isStoppingMirroring = true;
+            try
+            {
+                _previewTimer.Stop();
+
+                OverlayWindow overlay = _overlayWindow;
+                _overlayWindow = null;
+                if (overlay != null)
+                {
+                    overlay.StopRequested -= OverlayWindow_StopRequested;
+                    overlay.CropRequested -= OverlayWindow_CropRequested;
+                    overlay.HiddenRequested -= OverlayWindow_HiddenRequested;
+                    overlay.Closed -= OverlayWindow_Closed;
+                    overlay.StopCapture();
+                    overlay.Close();
+                }
+
+                _sessionManager.Stop(restoreSource);
+                StopExtensionServer();
+                SaveSettingsFromUi();
+                UpdateStatus(L("Status.MirroringStopped"));
+            }
+            finally
+            {
+                _isStoppingMirroring = false;
+            }
         }
 
         private void RestorePreviousSession()
@@ -425,14 +495,87 @@ namespace PlayPane
             return WindowListView.SelectedItem as SourceWindowInfo;
         }
 
+        private async Task<bool> StartExtensionServerAsync()
+        {
+            // Make sure any in-flight stop has finished before we start.
+            await _pendingStopTask.ConfigureAwait(true);
+
+            try
+            {
+                await _extensionFrameServer.StartAsync().ConfigureAwait(false);
+                UpdateStatus(_localizer.Format("Main.ExtensionServerReady", _extensionFrameServer.WebSocketUri));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus(ex.Message);
+                return false;
+            }
+        }
+
+        private void StopExtensionServer()
+        {
+            if (!_extensionFrameServer.IsRunning)
+            {
+                return;
+            }
+
+            // Offload to a background thread.  The NotifyIcon (system tray) runs on
+            // the WPF UI thread — blocking it with GetAwaiter().GetResult() freezes
+            // the tray icon for the entire shutdown duration (up to 2 s).
+            _pendingStopTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await _extensionFrameServer.StopAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort shutdown; keep exit resilient.
+                }
+            });
+        }
+
+        private void ExtensionFrameServer_ClientConnected(object sender, EventArgs e)
+        {
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                UpdateStatus(L("Status.ExtensionClientConnected"));
+            }));
+        }
+
+        private void ExtensionFrameServer_ClientDisconnected(object sender, EventArgs e)
+        {
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                UpdateStatus(L("Status.ExtensionClientDisconnected"));
+            }));
+        }
+
+        private void ExtensionFrameServer_FrameReceived(object sender, ExtensionFrameReceivedEventArgs e)
+        {
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                if (_settings != null &&
+                    _settings.CaptureSourceKind == CaptureSourceKind.BrowserExtension &&
+                    DateTime.UtcNow - _lastExtensionStatusUtc > TimeSpan.FromSeconds(2))
+                {
+                    _lastExtensionStatusUtc = DateTime.UtcNow;
+                    UpdateStatus(L("Status.ExtensionFrameReceived"));
+                }
+            }));
+        }
+
         private void ApplySettingsToUi()
         {
             OpacitySlider.Value = _settings.OpacityPercent;
             AspectRatioCheckBox.IsChecked = _settings.AspectRatioLocked;
             FullWindowRadioButton.IsChecked = _settings.CaptureMode == CaptureMode.FullWindow;
             CropRadioButton.IsChecked = _settings.CaptureMode == CaptureMode.Crop;
+            SelectComboItem(CaptureSourceComboBox, _settings.CaptureSourceKind.ToString());
             SelectComboItem(FrameRateComboBox, _settings.FrameRateMode.ToString());
             SelectPlacementItem();
+            UpdateCaptureSourceUi();
         }
 
         private void SaveSettingsFromUi()
@@ -446,6 +589,7 @@ namespace PlayPane
             _settings.AspectRatioLocked = AspectRatioCheckBox.IsChecked == true;
             _settings.Language = _localizer == null ? _settings.Language : _localizer.Language;
             _settings.CaptureMode = CropRadioButton.IsChecked == true ? CaptureMode.Crop : CaptureMode.FullWindow;
+            _settings.CaptureSourceKind = ReadCaptureSourceKind();
             _settings.FrameRateMode = ReadFrameRateMode(FrameRateComboBox);
             _settings.SourcePlacement = ReadPlacementOptions();
 
@@ -499,6 +643,39 @@ namespace PlayPane
             }
 
             return FrameRateMode.Standard;
+        }
+
+        private CaptureSourceKind ReadCaptureSourceKind()
+        {
+            string tag = ReadSelectedTag(CaptureSourceComboBox);
+            CaptureSourceKind value;
+            if (Enum.TryParse(tag, out value))
+            {
+                return value;
+            }
+
+            return CaptureSourceKind.Window;
+        }
+
+        private bool IsExtensionCaptureSelected()
+        {
+            return ReadCaptureSourceKind() == CaptureSourceKind.BrowserExtension;
+        }
+
+        private void UpdateCaptureSourceUi()
+        {
+            bool extension = IsExtensionCaptureSelected();
+            WindowListView.IsEnabled = !extension;
+            WindowSearchTextBox.IsEnabled = !extension;
+            ShowAllWindowsCheckBox.IsEnabled = !extension;
+            RefreshButton.IsEnabled = !extension;
+            RestorePreviousButton.IsEnabled = !extension;
+            RestoreSourceButton.IsEnabled = !extension;
+            PlacementComboBox.IsEnabled = !extension;
+
+            ExtensionStatusTextBlock.Text = extension
+                ? (_extensionFrameServer.IsRunning ? _localizer.Format("Main.ExtensionServerReady", _extensionFrameServer.WebSocketUri) : L("Main.ExtensionWaiting"))
+                : string.Empty;
         }
 
         private static string ReadSelectedTag(ComboBox comboBox)
@@ -597,19 +774,59 @@ namespace PlayPane
             _trayIcon.Text = "PlayPane";
             _trayIcon.Icon = System.Drawing.SystemIcons.Application;
             _trayIcon.Visible = true;
-            _trayIcon.DoubleClick += delegate { ShowControlPanel(); };
+            _trayIcon.DoubleClick += delegate { QueueUiAction(ShowControlPanel); };
+            _trayIcon.MouseUp += TrayIcon_MouseUp;
 
-            var menu = new Forms.ContextMenuStrip();
-            menu.Items.Add(L("Tray.ShowControlPanel"), null, delegate { ShowControlPanel(); });
-            menu.Items.Add(L("Tray.ShowOverlay"), null, delegate { if (_overlayWindow != null) _overlayWindow.Show(); });
-            menu.Items.Add(L("Tray.HideOverlay"), null, delegate { if (_overlayWindow != null) _overlayWindow.Hide(); });
-            menu.Items.Add(L("Tray.EnterEditMode"), null, delegate { if (_overlayWindow != null) _overlayWindow.EnterEditMode(); });
-            menu.Items.Add(L("Tray.EnterGameMode"), null, delegate { if (_overlayWindow != null) _overlayWindow.EnterGameMode(); });
-            menu.Items.Add(L("Tray.StopMirroring"), null, delegate { Dispatcher.Invoke(delegate { StopMirroring(true); }); });
-            menu.Items.Add(L("Tray.RestoreSource"), null, delegate { Dispatcher.Invoke(delegate { _sessionManager.RestoreSource(); }); });
-            menu.Items.Add(L("Tray.Settings"), null, delegate { Dispatcher.Invoke(OpenSettings); });
-            menu.Items.Add(L("Tray.Exit"), null, delegate { Dispatcher.Invoke(ExitApplication); });
-            _trayIcon.ContextMenuStrip = menu;
+            _trayMenu = new Forms.ContextMenuStrip();
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.ShowControlPanel"), ShowControlPanel));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.ShowOverlay"), delegate { if (_overlayWindow != null) _overlayWindow.Show(); }));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.HideOverlay"), delegate { if (_overlayWindow != null) _overlayWindow.Hide(); }));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.EnterEditMode"), delegate { if (_overlayWindow != null) _overlayWindow.EnterEditMode(); }));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.EnterGameMode"), delegate { if (_overlayWindow != null) _overlayWindow.EnterGameMode(); }));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.StopMirroring"), delegate { StopMirroring(true); }));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.RestoreSource"), delegate { _sessionManager.RestoreSource(); }));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.Settings"), OpenSettings));
+            _trayMenu.Items.Add(CreateTrayMenuItem(L("Tray.Exit"), ExitApplication));
+        }
+
+        private Forms.ToolStripMenuItem CreateTrayMenuItem(string text, Action action)
+        {
+            var item = new Forms.ToolStripMenuItem(text);
+            item.Click += delegate { QueueUiAction(action); };
+            return item;
+        }
+
+        private void TrayIcon_MouseUp(object sender, Forms.MouseEventArgs e)
+        {
+            if (e.Button == Forms.MouseButtons.Right && _trayMenu != null)
+            {
+                _trayMenu.Show(Forms.Control.MousePosition);
+            }
+        }
+
+        private void QueueUiAction(Action action)
+        {
+            if (action == null)
+            {
+                return;
+            }
+
+            if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
+
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    UpdateStatus(ex.Message);
+                }
+            }));
         }
 
         private void RecreateTrayIcon()
@@ -617,8 +834,15 @@ namespace PlayPane
             if (_trayIcon != null)
             {
                 _trayIcon.Visible = false;
+                _trayIcon.MouseUp -= TrayIcon_MouseUp;
                 _trayIcon.Dispose();
                 _trayIcon = null;
+            }
+
+            if (_trayMenu != null)
+            {
+                _trayMenu.Dispose();
+                _trayMenu = null;
             }
 
             CreateTrayIcon();
@@ -695,6 +919,9 @@ namespace PlayPane
             ProcessColumn.Header = L("Main.ColumnProcess");
             MonitorColumn.Header = L("Main.ColumnMonitor");
             SourcePreviewLabel.Text = L("Main.SourcePreview");
+            CaptureSourceLabel.Text = L("Main.CaptureSource");
+            WindowCaptureSourceItem.Content = L("Main.WindowCaptureSource");
+            ExtensionCaptureSourceItem.Content = L("Main.ExtensionCaptureSource");
             MirroringLabel.Text = L("Main.Mirroring");
             FullWindowRadioButton.Content = L("Main.FullWindow");
             CropRadioButton.Content = L("Main.CropRegion");

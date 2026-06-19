@@ -63,6 +63,32 @@ namespace PlayPane.Core.Application
             return CurrentSession;
         }
 
+        public CaptureSession StartBrowserExtension(AppSettings settings)
+        {
+            if (settings == null)
+            {
+                settings = AppSettings.CreateDefault();
+            }
+
+            settings.EnsureValid();
+            settings.CaptureSourceKind = CaptureSourceKind.BrowserExtension;
+            _settingsService.Save(settings);
+
+            CurrentSession = CaptureSession.ForBrowserExtension(settings);
+
+            if (_stateManager.Current == PlayPaneState.NoSourceSelected)
+            {
+                _stateManager.GoTo(PlayPaneState.Preview);
+            }
+
+            if (_stateManager.Current == PlayPaneState.Preview)
+            {
+                _stateManager.GoTo(PlayPaneState.Edit);
+            }
+
+            return CurrentSession;
+        }
+
         public void Stop(bool restoreSource)
         {
             if (restoreSource && _sourceSnapshot != null)

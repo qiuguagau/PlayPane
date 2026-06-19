@@ -20,7 +20,16 @@ namespace PlayPane.Tests
                 LocalizationServiceTests.UsesEnglishByDefault,
                 LocalizationServiceTests.TranslatesSimplifiedChinese,
                 LocalizationServiceTests.FallsBackToEnglishForUnknownKey,
-                SettingsServiceTests.LanguageRoundTrips
+                SettingsServiceTests.LanguageRoundTrips,
+                OverlayModePolicyTests.EditModeDoesNotEnableOverlayBehavior,
+                OverlayModePolicyTests.GameModeEnablesOverlayBehavior,
+                ExtensionFrameStoreTests.StoresAndReturnsLatestFrame,
+                ExtensionFrameStoreTests.EmptyStoreHasNoFrame,
+                ExtensionCaptureServiceTests.ThrowsWhenNoExtensionFrameExists,
+                ExtensionCaptureServiceTests.ReturnsLatestExtensionFrame,
+                CaptureSessionTests.BrowserExtensionSessionDoesNotRequireSourceWindow,
+                ExtensionFrameServerTests.ReceivesBinaryFrameOverWebSocket,
+                SessionManagerTests.StopBrowserExtensionSessionIsIdempotent
             };
 
             var failures = 0;

@@ -65,6 +65,13 @@
                         </Border>
                         <TextBlock x:Name="SelectedSourceTextBlock" Margin="0,8,0,16" Foreground="#5A6475" TextWrapping="Wrap" />
 
+                        <TextBlock x:Name="CaptureSourceLabel" Text="Capture source" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <ComboBox x:Name="CaptureSourceComboBox" SelectionChanged="CaptureSourceComboBox_SelectionChanged">
+                            <ComboBoxItem x:Name="WindowCaptureSourceItem" Content="Window Capture" Tag="Window" IsSelected="True" />
+                            <ComboBoxItem x:Name="ExtensionCaptureSourceItem" Content="Chrome/Edge Extension Capture" Tag="BrowserExtension" />
+                        </ComboBox>
+                        <TextBlock x:Name="ExtensionStatusTextBlock" Margin="4,0,4,16" Foreground="#5A6475" TextWrapping="Wrap" />
+
                         <TextBlock x:Name="MirroringLabel" Text="Mirroring" FontWeight="SemiBold" Margin="0,0,0,6" />
                         <StackPanel Orientation="Horizontal">
                             <RadioButton x:Name="FullWindowRadioButton" Content="Full window" IsChecked="True" Margin="4" />

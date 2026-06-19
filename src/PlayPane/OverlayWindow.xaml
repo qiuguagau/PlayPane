@@ -10,7 +10,7 @@
         ResizeMode="CanResizeWithGrip"
         WindowStyle="None"
         ShowInTaskbar="True"
-        Topmost="True"
+        Topmost="False"
         Background="Transparent">
     <Border x:Name="OuterBorder" BorderBrush="#2B6EF3" BorderThickness="2" Background="#020617">
         <Grid>

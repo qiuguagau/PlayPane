@@ -80,22 +80,25 @@ namespace PlayPane
 
         public void EnterEditMode()
         {
+            OverlayModePolicy policy = OverlayModePolicy.ForEditMode();
             IsGameMode = false;
+            Topmost = policy.IsTopmost;
             Toolbar.Visibility = Visibility.Visible;
             OuterBorder.BorderThickness = new Thickness(2);
             ResizeMode = ResizeMode.CanResizeWithGrip;
-            _clickThroughService.SetClickThrough(new WindowInteropHelper(this).Handle, false);
+            _clickThroughService.SetClickThrough(new WindowInteropHelper(this).Handle, policy.IsClickThrough);
             ShowActivated = true;
         }
 
         public void EnterGameMode()
         {
+            OverlayModePolicy policy = OverlayModePolicy.ForGameMode();
             IsGameMode = true;
+            Topmost = policy.IsTopmost;
             Toolbar.Visibility = Visibility.Collapsed;
             OuterBorder.BorderThickness = new Thickness(0);
             ResizeMode = ResizeMode.NoResize;
-            _clickThroughService.SetClickThrough(new WindowInteropHelper(this).Handle, true);
-            Topmost = true;
+            _clickThroughService.SetClickThrough(new WindowInteropHelper(this).Handle, policy.IsClickThrough);
         }
 
         public void SetOpacityPercent(int opacityPercent)
@@ -129,7 +132,7 @@ namespace PlayPane
 
             try
             {
-                if (Win32Api.IsIconic(_session.Source.Handle))
+                if (_session.Source != null && Win32Api.IsIconic(_session.Source.Handle))
                 {
                     ShowWarning(_localizer.Get("Overlay.SourceMinimized"));
                 }
@@ -138,7 +141,7 @@ namespace PlayPane
                 {
                     MirrorImage.Source = ImageConversion.ToBitmapSource(bitmap);
                     _lastValidFrameUtc = DateTime.UtcNow;
-                    if (!Win32Api.IsIconic(_session.Source.Handle))
+                    if (_session.Source == null || !Win32Api.IsIconic(_session.Source.Handle))
                     {
                         WarningBorder.Visibility = Visibility.Collapsed;
                     }

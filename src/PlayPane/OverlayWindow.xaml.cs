@@ -263,7 +263,7 @@ namespace PlayPane
             try
             {
                 WebRtcView.DefaultBackgroundColor = System.Drawing.Color.Transparent;
-                await WebRtcView.EnsureCoreWebView2Async().ConfigureAwait(true);
+                await WebRtcView.EnsureCoreWebView2Async(await WebView2Runtime.GetEnvironmentAsync().ConfigureAwait(true)).ConfigureAwait(true);
                 WebRtcView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
                 WebRtcView.CoreWebView2.Settings.AreDevToolsEnabled = false;
                 WebRtcView.CoreWebView2.Settings.IsZoomControlEnabled = false;

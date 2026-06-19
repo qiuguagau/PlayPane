@@ -1,5 +1,4 @@
 let mediaStream = null;
-let video = null;
 let socket = null;
 let peerConnection = null;
 let pendingRemoteCandidates = [];
@@ -44,7 +43,7 @@ async function startCapture(options) {
 
   captureOptions = {
     serverUrl: options.serverUrl,
-    frameRate: Math.max(5, Math.min(60, Number(options.frameRate) || 60))
+    frameRate: Math.max(5, Math.min(60, Number(options.frameRate) || 30))
   };
 
   mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -52,16 +51,11 @@ async function startCapture(options) {
     video: {
       mandatory: {
         chromeMediaSource: "tab",
-        chromeMediaSourceId: options.streamId
+        chromeMediaSourceId: options.streamId,
+        maxFrameRate: captureOptions.frameRate
       }
     }
   });
-
-  video = document.createElement("video");
-  video.muted = true;
-  video.playsInline = true;
-  video.srcObject = mediaStream;
-  await video.play();
 
   const [track] = mediaStream.getVideoTracks();
   if (track && typeof track.applyConstraints === "function") {
@@ -99,7 +93,6 @@ function stopCapture() {
     mediaStream = null;
   }
 
-  video = null;
   captureOptions = null;
   pendingRemoteCandidates = [];
 }
@@ -201,7 +194,10 @@ async function startPeerConnection() {
   stopPeerConnection();
   peerConnection = createPeerConnection();
   for (const streamTrack of mediaStream.getTracks()) {
-    peerConnection.addTrack(streamTrack, mediaStream);
+    const sender = addStreamTrack(streamTrack);
+    if (streamTrack.kind === "video") {
+      await applySenderFrameRate(sender);
+    }
   }
 
   const offer = await peerConnection.createOffer();
@@ -212,6 +208,20 @@ async function startPeerConnection() {
   await peerConnection.setLocalDescription(offer);
   sendSignal({ role: "source", type: "offer", sdp: peerConnection.localDescription.sdp });
   reportStatus("capturing", "");
+}
+
+function addStreamTrack(streamTrack) {
+  if (streamTrack.kind === "video" && typeof peerConnection.addTransceiver === "function") {
+    const transceiver = peerConnection.addTransceiver(streamTrack, {
+      direction: "sendonly",
+      streams: [mediaStream],
+      sendEncodings: [{ maxFramerate: captureOptions.frameRate }]
+    });
+
+    return transceiver.sender;
+  }
+
+  return peerConnection.addTrack(streamTrack, mediaStream);
 }
 
 function createPeerConnection() {
@@ -301,6 +311,35 @@ async function applyRequestedFrameRate(frameRate) {
     } catch {
       // Tab capture may ignore frame-rate constraints; WebRTC still adapts.
     }
+  }
+
+  if (peerConnection) {
+    for (const sender of peerConnection.getSenders()) {
+      if (sender.track && sender.track.kind === "video") {
+        await applySenderFrameRate(sender);
+      }
+    }
+  }
+}
+
+async function applySenderFrameRate(sender) {
+  if (!sender || typeof sender.getParameters !== "function" || typeof sender.setParameters !== "function" || !captureOptions) {
+    return;
+  }
+
+  const parameters = sender.getParameters();
+  if (!parameters.encodings || parameters.encodings.length === 0) {
+    parameters.encodings = [{}];
+  }
+
+  for (const encoding of parameters.encodings) {
+    encoding.maxFramerate = captureOptions.frameRate;
+  }
+
+  try {
+    await sender.setParameters(parameters);
+  } catch {
+    // Some Chromium builds reject sender parameter changes for tab capture.
   }
 }
 

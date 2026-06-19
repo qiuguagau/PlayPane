@@ -64,7 +64,7 @@ async function startCapture(options) {
     type: "start-capture",
     streamId: options.streamId,
     serverUrl: PLAYPANE_SOCKET_URL,
-    frameRate: 60
+    frameRate: 30
   });
 
   captureState = {
